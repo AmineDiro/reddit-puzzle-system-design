@@ -59,31 +59,39 @@ impl Framing {
     pub fn parse<'a>(&self, buf: &'a mut [u8]) -> RecvMsgFrame<'a> {
         // Layout of RecvMsgMulti buffer:
         // 16 bytes: io_uring_recvmsg_out
-        // namelen: peer address
-        // controllen: ancillary data (IP_PKTINFO)
+        // namelen (padded to msghdr.msg_namelen): peer address
+        // controllen (padded to msghdr.msg_controllen): ancillary data (IP_PKTINFO)
         // payloadlen: the actual data
+
         let namelen = u32::from_ne_bytes(buf[0..4].try_into().unwrap()) as usize;
         let controllen = u32::from_ne_bytes(buf[4..8].try_into().unwrap()) as usize;
         let payloadlen = u32::from_ne_bytes(buf[8..12].try_into().unwrap()) as usize;
 
-        let mut pos = 16;
+        // Constants matching WorkerCore msghdr configuration
+        let msg_namelen_cap = std::mem::size_of::<libc::sockaddr_in>(); // 16
+        let msg_controllen_cap = 64;
+
+        let name_pos = 16;
+        let control_pos = name_pos + msg_namelen_cap;
+        let payload_pos = control_pos + msg_controllen_cap;
 
         // 1. Extract Peer Address
-        let peer_addr = if namelen >= std::mem::size_of::<libc::sockaddr_in>() {
-            let sin: libc::sockaddr_in = unsafe { std::ptr::read(buf[pos..].as_ptr() as *const _) };
-            let ip = Ipv4Addr::from(u32::from_be(sin.sin_addr.s_addr));
-            let port = u16::from_be(sin.sin_port);
-            SocketAddr::V4(SocketAddrV4::new(ip, port))
-        } else {
-            "127.0.0.1:0".parse().unwrap()
-        };
-        pos += namelen;
+        let peer_addr =
+            if namelen >= std::mem::size_of::<libc::sockaddr_in>() && namelen <= msg_namelen_cap {
+                let sin: libc::sockaddr_in =
+                    unsafe { std::ptr::read(buf[name_pos..].as_ptr() as *const _) };
+                let ip = Ipv4Addr::from(u32::from_be(sin.sin_addr.s_addr));
+                let port = u16::from_be(sin.sin_port);
+                SocketAddr::V4(SocketAddrV4::new(ip, port))
+            } else {
+                "127.0.0.1:0".parse().unwrap()
+            };
 
         // 2. Extract Local Address (Destination IP) from IP_PKTINFO
         let mut local_ip = Ipv4Addr::UNSPECIFIED;
-        if controllen > 0 {
-            let mut cmsg_pos = pos;
-            let cmsg_end = pos + controllen;
+        if controllen > 0 && controllen <= msg_controllen_cap {
+            let mut cmsg_pos = control_pos;
+            let cmsg_end = control_pos + controllen;
             while cmsg_pos + std::mem::size_of::<libc::cmsghdr>() <= cmsg_end {
                 let cmsg: libc::cmsghdr =
                     unsafe { std::ptr::read(buf[cmsg_pos..].as_ptr() as *const _) };
@@ -98,9 +106,8 @@ impl Framing {
             }
         }
         let local_addr = SocketAddr::V4(SocketAddrV4::new(local_ip, self.local_port));
-        pos += controllen;
 
-        let payload = &mut buf[pos..pos + payloadlen];
+        let payload = &mut buf[payload_pos..payload_pos + payloadlen];
 
         RecvMsgFrame {
             peer_addr,

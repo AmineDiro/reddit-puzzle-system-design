@@ -83,9 +83,13 @@ impl TransportState {
             if hdr.ty != quiche::Type::Initial {
                 return None;
             }
-            match self.accept_connection(&hdr.dcid[..], None, local, peer) {
+            match self.accept_connection(&hdr.dcid[..], Some(&hdr.dcid[..]), local, peer) {
                 Ok(c) => c,
-                Err(_) => return None,
+                Err(e) => {
+                    #[cfg(feature = "debug-logs")]
+                    println!("Failed to accept connection: {:?}", e);
+                    return None;
+                }
             }
         } else {
             self.connections.get_mut(&hdr.dcid[..]).unwrap()
