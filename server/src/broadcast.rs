@@ -47,9 +47,7 @@ impl BroadcastCore {
         loop {
             std::thread::sleep(self.interval);
 
-            let mut seq;
-            let mut previous_active = ACTIVE_INDEX.load(Ordering::Relaxed);
-
+            let mut seq = 0;
             loop {
                 seq = CANVAS_SEQ.load(Ordering::Acquire);
                 if seq & 1 != 0 {
@@ -60,11 +58,6 @@ impl BroadcastCore {
                 // Perform the read/copy
                 // Determine next buffer index
                 let current_active = ACTIVE_INDEX.load(Ordering::Relaxed);
-
-                // TODO: maybe there is a bug here !
-                if previous_active == current_active {
-                    continue;
-                }
 
                 let next_active = (current_active + 1) % 16;
                 canvas.snapshot_to_pool(next_active);
@@ -89,8 +82,6 @@ impl BroadcastCore {
 
                     break;
                 }
-
-                previous_active = next_active;
             }
         }
     }

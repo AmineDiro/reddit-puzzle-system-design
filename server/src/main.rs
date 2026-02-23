@@ -4,6 +4,7 @@ pub mod cooldown;
 pub mod master;
 pub mod spsc;
 pub mod timing_wheel;
+pub mod transport;
 pub mod worker;
 
 use crate::broadcast::BroadcastCore;
