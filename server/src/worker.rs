@@ -37,6 +37,9 @@ pub struct WorkerCore {
     tx_items: Box<[TxItem]>,
     tx_free_indices: Vec<usize>,
     msghdr: Box<libc::msghdr>,
+    last_sent_canvas: Box<[u8; crate::canvas::CANVAS_SIZE]>,
+    broadcast_ticks: u32,
+    diff_buffer: Vec<u8>,
 }
 
 unsafe impl Send for WorkerCore {}
@@ -149,6 +152,12 @@ impl WorkerCore {
                 msghdr.msg_controllen = 64; // Enough for IP_PKTINFO
                 msghdr
             }),
+            last_sent_canvas: vec![0; crate::canvas::CANVAS_SIZE]
+                .into_boxed_slice()
+                .try_into()
+                .unwrap(),
+            broadcast_ticks: 0,
+            diff_buffer: Vec::with_capacity(1024),
         }
     }
 
@@ -291,22 +300,59 @@ impl WorkerCore {
         let current_active = crate::canvas::ACTIVE_INDEX.load(std::sync::atomic::Ordering::Relaxed);
         if current_active != self.last_broadcast_index {
             self.last_broadcast_index = current_active;
+            self.broadcast_ticks += 1;
 
-            unsafe {
-                let compressed_len = crate::canvas::COMPRESSED_LENS[current_active];
-                let buffer_slice =
-                    &crate::canvas::COMPRESSED_BUFFER_POOL[current_active].data[..compressed_len];
+            if self.broadcast_ticks == 1 || self.broadcast_ticks % 60 == 0 {
+                // Send full RLE rarely
+                unsafe {
+                    let compressed_len = crate::canvas::COMPRESSED_LENS[current_active];
+                    let buffer_slice = &crate::canvas::COMPRESSED_BUFFER_POOL[current_active].data
+                        [..compressed_len];
 
-                for (_, conn) in self.transport.connections.values_mut() {
+                    for (_, conn) in self.transport.connections.values_mut() {
+                        #[cfg(feature = "debug-logs")]
+                        println!(
+                            "Worker: broadcasting {} bytes of FULL RLE data to client",
+                            compressed_len
+                        );
+
+                        // Send compressed data in MTU-sized chunks. 1200 is safe for most networks.
+                        for chunk in buffer_slice.chunks(1200) {
+                            let _ = conn.dgram_send(chunk);
+                        }
+                    }
+
+                    // Sync last_sent_canvas
+                    let new_canvas = &crate::canvas::BUFFER_POOL[current_active].data;
+                    self.last_sent_canvas.copy_from_slice(new_canvas);
+                }
+            } else {
+                // Send very compressed diff
+                self.diff_buffer.clear();
+                let new_canvas = unsafe { &crate::canvas::BUFFER_POOL[current_active].data };
+
+                for i in 0..crate::canvas::CANVAS_SIZE {
+                    let new_pixel = new_canvas[i];
+                    if self.last_sent_canvas[i] != new_pixel {
+                        // Changed cell: [u32 index, u8 color]
+                        self.diff_buffer
+                            .extend_from_slice(&(i as u32).to_le_bytes());
+                        self.diff_buffer.push(new_pixel);
+
+                        self.last_sent_canvas[i] = new_pixel;
+                    }
+                }
+
+                if !self.diff_buffer.is_empty() {
                     #[cfg(feature = "debug-logs")]
                     println!(
-                        "Worker: broadcasting {} bytes of RLE data to client",
-                        compressed_len
+                        "Worker: broadcasting {} bytes of DIFF data to client",
+                        self.diff_buffer.len()
                     );
-
-                    // Send compressed data in MTU-sized chunks. 1200 is safe for most networks.
-                    for chunk in buffer_slice.chunks(1200) {
-                        let _ = conn.dgram_send(chunk);
+                    for (_, conn) in self.transport.connections.values_mut() {
+                        for chunk in self.diff_buffer.chunks(1200) {
+                            let _ = conn.dgram_send(chunk);
+                        }
                     }
                 }
             }
