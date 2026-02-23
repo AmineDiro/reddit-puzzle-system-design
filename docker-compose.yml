@@ -1,0 +1,51 @@
+version: '3.8'
+
+networks:
+  loadgen_net:
+    name: br-loadgen
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.5.0.0/16
+
+x-worker-base: &worker-base
+  build: 
+    context: .
+    dockerfile: Dockerfile.loadgen
+  # Lock to CCX 1 (Physical Cores 3, 4, 5 and their SMT siblings)
+  cpuset: "3,4,5,9,10,11" 
+  ulimits:
+    nofile:
+      soft: 1048576
+      hard: 1048576
+  volumes:
+    - ./test_results:/metrics
+
+services:
+  worker_1:
+    <<: *worker-base
+    networks:
+      loadgen_net:
+        ipv4_address: 10.5.0.2
+    command: ["./loadgen", "--target", "https://10.5.0.1:4433", "--clients", "15000", "--id", "worker_1"]
+
+  worker_2:
+    <<: *worker-base
+    networks:
+      loadgen_net:
+        ipv4_address: 10.5.0.3
+    command: ["./loadgen", "--target", "https://10.5.0.1:4433", "--clients", "15000", "--id", "worker_2"]
+
+  worker_3:
+    <<: *worker-base
+    networks:
+      loadgen_net:
+        ipv4_address: 10.5.0.4
+    command: ["./loadgen", "--target", "https://10.5.0.1:4433", "--clients", "15000", "--id", "worker_3"]
+
+  worker_4:
+    <<: *worker-base
+    networks:
+      loadgen_net:
+        ipv4_address: 10.5.0.5
+    command: ["./loadgen", "--target", "https://10.5.0.1:4433", "--clients", "15000", "--id", "worker_4"]
