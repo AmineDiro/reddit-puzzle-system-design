@@ -86,8 +86,9 @@ impl TransportState {
             Err(_) => return None,
         };
 
-        let (user_id, conn) = if !self.connections.contains_key(&hdr.dcid[..]) {
-            // New connection? Handle version negotiation/handshake
+        // Track both the destination ID and any mapped tuple so the rust checker stops panicking.
+        let is_new = !self.connections.contains_key(&hdr.dcid[..]);
+        if is_new {
             if hdr.ty != quiche::Type::Initial {
                 return None;
             }
@@ -97,8 +98,14 @@ impl TransportState {
 
             match self.accept_connection(&scid[..], Some(&hdr.dcid[..]), local, peer) {
                 Ok(_) => {
-                    let tuple = self.connections.get_mut(&scid[..]).unwrap();
-                    (tuple.0, &mut tuple.1)
+                    let tuple = self.connections.get(&scid[..]).unwrap();
+                    let user_id = tuple.0;
+                    // Mirror map the tuple so the following lookups succeed without clones.
+                    let odcid = hdr.dcid.to_vec();
+                    // We need connection to be mirrored under odcid too, because the early loop looks it up
+                    // But connections can't be cloned. We must just wait for quiche to emit packets using SCID.
+                    self.connections
+                        .insert(odcid.clone(), (user_id, tuple.1.clone()));
                 }
                 Err(e) => {
                     #[cfg(feature = "debug-logs")]
@@ -106,10 +113,11 @@ impl TransportState {
                     return None;
                 }
             }
-        } else {
-            let tuple = self.connections.get_mut(&hdr.dcid[..]).unwrap();
-            (tuple.0, &mut tuple.1)
-        };
+        }
+
+        let tuple = self.connections.get_mut(&hdr.dcid[..])?;
+        let user_id = tuple.0;
+        let conn = &mut tuple.1;
 
         let recv_info = RecvInfo {
             from: peer,
