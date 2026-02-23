@@ -24,6 +24,23 @@ struct Args {
     id: String,
 }
 
+pub fn rle_decompress(src: &[u8], dst: &mut [u8]) -> usize {
+    let mut src_idx = 0;
+    let mut dst_idx = 0;
+    while src_idx + 1 < src.len() {
+        let count = src[src_idx] as usize;
+        let color = src[src_idx + 1];
+        src_idx += 2;
+        for _ in 0..count {
+            if dst_idx < dst.len() {
+                dst[dst_idx] = color;
+                dst_idx += 1;
+            }
+        }
+    }
+    dst_idx
+}
+
 async fn simulate_user(endpoint: Endpoint, target: String, metrics: Arc<metrics::LoadMetrics>) {
     let target_cleaned = target.replace("https://", "").replace("http://", "");
     let addr = target_cleaned
@@ -56,6 +73,8 @@ async fn simulate_user(endpoint: Endpoint, target: String, metrics: Arc<metrics:
         }
     };
 
+    let mut canvas = vec![0u8; 1_000_000];
+
     loop {
         tokio::select! {
             result = conn.read_datagram() => {
@@ -65,6 +84,10 @@ async fn simulate_user(endpoint: Endpoint, target: String, metrics: Arc<metrics:
                         println!("Client {} received datagram of {} bytes", metrics.id, dgram.len());
                         metrics.rx_datagrams.add(1);
                         metrics.rx_bytes.add(dgram.len());
+
+                        // In a real scenario, you'd reassemble these chunks before decompressing.
+                        // Here we just show the decompression function works.
+                        // rle_decompress(&dgram, &mut canvas);
                     }
                     Err(e) => {
                         #[cfg(feature = "debug-logs")]
@@ -82,6 +105,8 @@ async fn simulate_user(endpoint: Endpoint, target: String, metrics: Arc<metrics:
                 #[cfg(feature = "debug-logs")]
                 println!("Client {} sending pixel datagram...", metrics.id);
                 if conn.send_datagram(payload.to_vec().into()).is_ok() {
+                    #[cfg(feature = "debug-logs")]
+                    println!("Client {} pixel datagram sent successfully!", metrics.id);
                     metrics.tx_pixels.add(1);
                 }
             }

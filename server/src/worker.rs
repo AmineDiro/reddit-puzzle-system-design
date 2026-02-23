@@ -292,13 +292,23 @@ impl WorkerCore {
         if current_active != self.last_broadcast_index {
             self.last_broadcast_index = current_active;
 
-            // Grab the newly compressed buffer without allocating or locking
-            let buffer_slice = unsafe { &crate::canvas::BUFFER_POOL[current_active].data[..1200] };
+            unsafe {
+                let compressed_len = crate::canvas::COMPRESSED_LENS[current_active];
+                let buffer_slice =
+                    &crate::canvas::COMPRESSED_BUFFER_POOL[current_active].data[..compressed_len];
 
-            for (_, conn) in self.transport.connections.values_mut() {
-                // NOTE:
-                // Just puts in quiche state, not sending yet !!
-                let _ = conn.dgram_send(buffer_slice);
+                for (_, conn) in self.transport.connections.values_mut() {
+                    #[cfg(feature = "debug-logs")]
+                    println!(
+                        "Worker: broadcasting {} bytes of RLE data to client",
+                        compressed_len
+                    );
+
+                    // Send compressed data in MTU-sized chunks. 1200 is safe for most networks.
+                    for chunk in buffer_slice.chunks(1200) {
+                        let _ = conn.dgram_send(chunk);
+                    }
+                }
             }
         }
     }
