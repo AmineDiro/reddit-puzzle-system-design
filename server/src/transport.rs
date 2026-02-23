@@ -103,7 +103,7 @@ impl TransportState {
             let mut scid = [0; quiche::MAX_CONN_ID_LEN];
             rand::thread_rng().fill(&mut scid);
 
-            match self.accept_connection(&scid[..], Some(&hdr.dcid[..]), local, peer) {
+            match self.accept_connection(&scid[..], None, local, peer) {
                 Ok(_) => {
                     process_id = scid.to_vec();
                     self.cid_map.insert(hdr.dcid.to_vec(), scid.to_vec());
