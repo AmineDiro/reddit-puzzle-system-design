@@ -94,8 +94,7 @@ impl TransportState {
         }
 
         // Track both the destination ID and any mapped tuple so the rust checker stops panicking.
-        let is_new = !self.connections.contains_key(&process_id[..]);
-        if is_new {
+        if !self.connections.contains_key(&process_id[..]) {
             if hdr.ty != quiche::Type::Initial {
                 return None;
             }
@@ -126,15 +125,28 @@ impl TransportState {
         };
         let _ = conn.recv(buf, recv_info);
 
-        // Extract WebTransport datagrams (Pixels)
         let mut pixels = Vec::new();
         if conn.is_established() {
+            // TODO: use h3 to poll dgrams
             // In a real WebTransport setup, we'd use h3 to poll dgrams
-            // Mocking datagram extraction for the TRD flow
-            while let Ok(len) = conn.dgram_recv(buf) {
+            let mut dgram_buf = [0; 1500];
+            // Securely copies the decrypted, verified WebTransport datagram
+            // out of quiche's internal state machine into our local variable dgram_buf
+            while let Ok(len) = conn.dgram_recv(&mut dgram_buf) {
                 if len == std::mem::size_of::<PixelDatagram>() {
-                    let pixel: PixelDatagram = unsafe { std::ptr::read(buf.as_ptr() as *const _) };
+                    let pixel = PixelDatagram {
+                        x: u16::from_ne_bytes([dgram_buf[0], dgram_buf[1]]),
+                        y: u16::from_ne_bytes([dgram_buf[2], dgram_buf[3]]),
+                        color: dgram_buf[4],
+                    };
                     pixels.push(pixel);
+                } else {
+                    #[cfg(feature = "debug-logs")]
+                    println!(
+                        "Received datagram of incorrect size: {} (expected {})",
+                        len,
+                        std::mem::size_of::<PixelDatagram>()
+                    );
                 }
             }
         }

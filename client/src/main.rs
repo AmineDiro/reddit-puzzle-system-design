@@ -74,10 +74,14 @@ async fn simulate_user(endpoint: Endpoint, target: String, metrics: Arc<metrics:
                 }
             }
             _ = sleep(Duration::from_secs(rand::thread_rng().gen_range(1..10))) => {
-                let payload = b"x:100,y:200,color:FFF";
+                let mut payload = [0u8; 5];
+                payload[0..2].copy_from_slice(&100u16.to_ne_bytes());
+                payload[2..4].copy_from_slice(&200u16.to_ne_bytes());
+                payload[4] = 255;
+
                 #[cfg(feature = "debug-logs")]
                 println!("Client {} sending pixel datagram...", metrics.id);
-                if conn.send_datagram(payload.as_slice().into()).is_ok() {
+                if conn.send_datagram(payload.to_vec().into()).is_ok() {
                     metrics.tx_pixels.add(1);
                 }
             }
