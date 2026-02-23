@@ -13,6 +13,7 @@ pub struct PixelDatagram {
 pub struct TransportState {
     // Map of QUIC Source Connection ID -> Active Connection (Thread local)
     pub connections: FxHashMap<Vec<u8>, (u32, Connection)>,
+    pub cid_map: FxHashMap<Vec<u8>, Vec<u8>>,
     pub next_user_id: u32,
 
     // Quiche backend config
@@ -48,6 +49,7 @@ impl TransportState {
 
         Self {
             connections: FxHashMap::with_capacity_and_hasher(10000, Default::default()),
+            cid_map: FxHashMap::with_capacity_and_hasher(10000, Default::default()),
             next_user_id: 0,
             config,
         }
@@ -87,6 +89,9 @@ impl TransportState {
         };
 
         let mut process_id = hdr.dcid.to_vec();
+        if let Some(scid) = self.cid_map.get(&hdr.dcid[..]) {
+            process_id = scid.clone();
+        }
 
         // Track both the destination ID and any mapped tuple so the rust checker stops panicking.
         let is_new = !self.connections.contains_key(&process_id[..]);
@@ -101,6 +106,7 @@ impl TransportState {
             match self.accept_connection(&scid[..], Some(&hdr.dcid[..]), local, peer) {
                 Ok(_) => {
                     process_id = scid.to_vec();
+                    self.cid_map.insert(hdr.dcid.to_vec(), scid.to_vec());
                 }
                 Err(e) => {
                     #[cfg(feature = "debug-logs")]
