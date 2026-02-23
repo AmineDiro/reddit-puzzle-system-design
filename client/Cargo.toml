@@ -5,9 +5,10 @@ edition = "2024"
 
 [dependencies]
 tokio = { version = "1.32", features = ["full"] }
-wtransport = "0.7.0"
 rand = "0.8"
 clap = { version = "4.4", features = ["derive"] }
+quinn = "0.10.2"
+rustls = { version = "0.21.7", features = ["quic", "dangerous_configuration"] }
 
 [features]
 debug-logs = []

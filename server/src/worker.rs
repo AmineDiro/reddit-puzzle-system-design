@@ -455,8 +455,26 @@ impl WorkerCore {
                 if user_data & 0xFF == TAG_OUTGOING_UDP {
                     let idx = (user_data >> 8) as usize;
                     self.tx_free_indices.push(idx);
-                } else if user_data == TAG_INCOMING_UDP && result >= 0 {
-                    self.handle_incoming_cqe(&mut ring, flags, fd_types);
+                } else if user_data == TAG_INCOMING_UDP {
+                    if result >= 0 {
+                        self.handle_incoming_cqe(&mut ring, flags, fd_types);
+                    } else {
+                        #[cfg(feature = "debug-logs")]
+                        println!("CQE error in RecvMsgMulti: {}", result);
+
+                        if !io_uring::cqueue::more(flags) {
+                            let recv = opcode::RecvMsgMulti::new(
+                                fd_types,
+                                self.msghdr.as_ref() as *const _,
+                                BGID,
+                            )
+                            .build()
+                            .user_data(TAG_INCOMING_UDP);
+                            unsafe {
+                                ring.submission().push(&recv).unwrap();
+                            }
+                        }
+                    }
                 }
             }
 
