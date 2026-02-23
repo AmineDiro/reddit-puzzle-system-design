@@ -20,7 +20,7 @@ RUN apt-get update && apt-get install -y libzstd1 && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /usr/src/bare-metal-canvas/target/release/server /usr/local/bin/server
 
-EXPOSE 8080/udp
+EXPOSE 4433/udp
 
 # NOTE: Since io_uring requires kernel interaction, run this container with --privileged
 CMD ["server"]

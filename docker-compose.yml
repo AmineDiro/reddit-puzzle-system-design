@@ -1,54 +1,74 @@
 version: '3.8'
 
 networks:
-  loadgen_net:
-    name: br-loadgen
+  canvas_net:
+    name: canvas_net
     driver: bridge
     ipam:
       config:
         - subnet: 10.5.0.0/16
 
-x-worker-base: &worker-base
-  build: 
-    context: .
-    dockerfile: Dockerfile.loadgen
-
-  # TODO: ryzen 3600x only
-  #  Lock to CCX 1 (Physical Cores 3, 4, 5 and their SMT siblings)
-  # cpuset: "3,4,5,9,10,11" 
+# Common configuration for high-performance networking and bare-metal access
+x-common-config: &common-config
+  privileged: true
   ulimits:
     nofile:
       soft: 1048576
       hard: 1048576
-  volumes:
-    - ./test_results:/metrics
+    memlock: -1
+  sysctls:
+    # Kernel optimizations for high-throughput UDP/QUIC
+    - net.core.rmem_max=33554432
+    - net.core.wmem_max=33554432
+    - net.core.rmem_default=33554432
+    - net.core.wmem_default=33554432
+    - net.core.netdev_max_backlog=50000
+    - net.ipv4.udp_rmem_min=16384
+    - net.ipv4.udp_wmem_min=16384
+    - net.ipv4.ip_local_port_range=1024 65535
 
 services:
-  worker_1:
+  server:
+    <<: *common-config
+    build:
+      context: .
+      dockerfile: Dockerfile
+    networks:
+      canvas_net:
+        ipv4_address: 10.5.0.10
+    # Bind to CCX 0 (Threads 0,1,2 and siblings 6,7,8)
+    cpuset: "0,1,2,6,7,8"
+    # 1 Master thread + 2 Worker threads
+    command: ["server", "--workers", "2"]
+    ports:
+      - "4433:4433/udp"
+
+  worker_1: &worker-base
+    <<: *common-config
+    build:
+      context: .
+      dockerfile: Dockerfile.loadgen
+    networks:
+      canvas_net:
+        ipv4_address: 10.5.0.2
+    # Bind to unique cores in CCX 1 to avoid contention
+    cpuset: "3,9"
+    volumes:
+      - ./test_results:/metrics
+    command: ["./loadgen", "--target", "https://10.5.0.10:4433", "--clients", "15000", "--id", "worker_1"]
+
+  worker_2:
     <<: *worker-base
     networks:
-      loadgen_net:
-        ipv4_address: 10.5.0.2
-    # command: ["./loadgen", "--target", "172.16.1.24:8080", "--clients", "15000", "--id", "worker_1"]
-    command: ["./loadgen", "--target", "https://172.16.1.24:8080", "--clients", "1", "--id", "worker_1"]
+      canvas_net:
+        ipv4_address: 10.5.0.3
+    cpuset: "4,10"
+    command: ["./loadgen", "--target", "https://10.5.0.10:4433", "--clients", "15000", "--id", "worker_2"]
 
-  # worker_2:
-  #   <<: *worker-base
-  #   networks:
-  #     loadgen_net:
-  #       ipv4_address: 10.5.0.3
-  #   command: ["./loadgen", "--target", "172.16.1.24:8080", "--clients", "15000", "--id", "worker_2"]
-
-  # worker_3:
-  #   <<: *worker-base
-  #   networks:
-  #     loadgen_net:
-  #       ipv4_address: 10.5.0.4
-  #   command: ["./loadgen", "--target", "172.16.1.24:8080", "--clients", "15000", "--id", "worker_3"]
-
-  # worker_4:
-  #   <<: *worker-base
-  #   networks:
-  #     loadgen_net:
-  #       ipv4_address: 10.5.0.5
-  #   command: ["./loadgen", "--target", "172.16.1.24:8080", "--clients", "15000", "--id", "worker_4"]
+  worker_3:
+    <<: *worker-base
+    networks:
+      canvas_net:
+        ipv4_address: 10.5.0.4
+    cpuset: "5,11"
+    command: ["./loadgen", "--target", "https://10.5.0.10:4433", "--clients", "15000", "--id", "worker_3"]
