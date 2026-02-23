@@ -59,7 +59,7 @@ impl TransportState {
         odcid: Option<&[u8]>,
         local: SocketAddr,
         peer: SocketAddr,
-    ) -> Result<(u32, Connection), quiche::Error> {
+    ) -> Result<(), quiche::Error> {
         let scid_val = quiche::ConnectionId::from_ref(scid);
         let odcid_val = odcid.map(quiche::ConnectionId::from_ref);
         let conn = quiche::accept(&scid_val, odcid_val.as_ref(), local, peer, &mut self.config)?;
@@ -70,8 +70,9 @@ impl TransportState {
 
         #[cfg(feature = "debug-logs")]
         println!("Accepted new QUIC connection ID: {:?}", scid_val);
+        // TODO: fix this, we insert then fetch, we should just return the conn
         self.connections.insert(scid.to_vec(), (user_id, conn));
-        Ok((user_id, conn))
+        Ok(())
     }
 
     pub fn handle_incoming(
@@ -95,7 +96,10 @@ impl TransportState {
             rand::thread_rng().fill(&mut scid);
 
             match self.accept_connection(&scid[..], Some(&hdr.dcid[..]), local, peer) {
-                Ok((user_id, mut conn)) => (user_id, &mut conn),
+                Ok(_) => {
+                    let tuple = self.connections.get_mut(&scid[..]).unwrap();
+                    (tuple.0, &mut tuple.1)
+                }
                 Err(e) => {
                     #[cfg(feature = "debug-logs")]
                     println!("Failed to accept connection: {:?}", e);
