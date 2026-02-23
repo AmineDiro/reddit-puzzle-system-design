@@ -214,6 +214,27 @@ impl WorkerCore {
                     .setup_single_issuer()
                     .build(8192)
             })
+            .or_else(|_| {
+                println!("Warning: Failed to create io_uring of size 8192, falling back to 4096");
+                IoUring::builder()
+                    .setup_coop_taskrun()
+                    .setup_single_issuer()
+                    .build(4096)
+            })
+            .or_else(|_| {
+                println!("Warning: Failed to create io_uring of size 4096, falling back to 2048");
+                IoUring::builder()
+                    .setup_coop_taskrun()
+                    .setup_single_issuer()
+                    .build(2048)
+            })
+            .or_else(|_| {
+                println!("Warning: Failed to create io_uring of size 2048, falling back to 1024");
+                IoUring::builder()
+                    .setup_coop_taskrun()
+                    .setup_single_issuer()
+                    .build(1024)
+            })
             .expect("Failed to create io_uring")
     }
 

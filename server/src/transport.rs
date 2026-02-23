@@ -37,9 +37,12 @@ impl TransportState {
         // Required for WebTransport / Datagrams
         config.enable_dgram(true, 1000, 1000);
 
-        // TODO? load TLS certs here
-        // config.load_cert_chain_from_pem_file("cert.crt").unwrap();
-        // config.load_priv_key_from_pem_file("key.key").unwrap();
+        let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+        std::fs::write("cert.crt", cert.cert.pem()).unwrap();
+        std::fs::write("key.key", cert.key_pair.serialize_pem()).unwrap();
+
+        config.load_cert_chain_from_pem_file("cert.crt").unwrap();
+        config.load_priv_key_from_pem_file("key.key").unwrap();
 
         Self {
             connections: FxHashMap::with_capacity_and_hasher(10000, Default::default()),

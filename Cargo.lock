@@ -965,6 +965,19 @@ dependencies = [
 
 [[package]]
 name = "rcgen"
+version = "0.13.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75e669e5202259b5314d1ea5397316ad400819437857b90861765f24c4cf80a2"
+dependencies = [
+ "pem",
+ "ring",
+ "rustls-pki-types",
+ "time",
+ "yasna",
+]
+
+[[package]]
+name = "rcgen"
 version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "10b99e0098aa4082912d4c649628623db6aba77335e4f4569ff5083a6448b32e"
@@ -1142,6 +1155,7 @@ dependencies = [
  "io-uring",
  "libc",
  "quiche",
+ "rcgen 0.13.2",
  "rustc-hash",
  "socket2 0.6.2",
  "zstd",
@@ -1713,7 +1727,7 @@ dependencies = [
  "bytes",
  "pem",
  "quinn",
- "rcgen",
+ "rcgen 0.14.7",
  "rustls",
  "rustls-native-certs",
  "rustls-pki-types",
