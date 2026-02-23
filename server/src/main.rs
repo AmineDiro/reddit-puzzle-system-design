@@ -32,12 +32,26 @@ fn main() {
     println!("Bare-metal canvas server initializing...");
 
     let port = 4433;
+    let args: Vec<String> = std::env::args().collect();
+    let num_workers_arg = args
+        .iter()
+        .position(|r| r == "-w" || r == "--workers")
+        .and_then(|pos| args.get(pos + 1))
+        .and_then(|val| val.parse::<usize>().ok());
 
     let core_ids = core_affinity::get_core_ids().expect("Failed to get core IDs");
     let num_cores = core_ids.len();
 
-    if num_cores < 2 {
-        panic!("Single core system not supported for bare-metal architecture");
+    let num_workers = num_workers_arg.unwrap_or(num_cores.saturating_sub(1));
+
+    if num_workers == 0 {
+        panic!("At least 1 worker is required. Use -w <num> to specify.");
+    }
+
+    if num_cores < 2 && num_workers_arg.is_none() {
+        panic!(
+            "Single core system detected. At least 2 cores are recommended, or force number of workers with -w 1"
+        );
     }
 
     // Partition Cores
@@ -45,12 +59,15 @@ fn main() {
     // Cores 1+: Workers (Ingress/Validation)
     let master_core_id = core_ids[0].id;
 
-    let worker_cores: Vec<usize> = core_ids.iter().skip(1).map(|c| c.id).collect();
+    let worker_cores: Vec<usize> = (0..num_workers)
+        .map(|i| core_ids[(i + 1) % num_cores].id)
+        .collect();
 
     println!(
-        "Topology: 1 Master (Core {}), {} Workers",
+        "Topology: 1 Master (Core {}), {} Workers assigned to cores {:?}",
         master_core_id,
-        worker_cores.len()
+        worker_cores.len(),
+        worker_cores
     );
 
     let canvas = Arc::new(Canvas::new());
