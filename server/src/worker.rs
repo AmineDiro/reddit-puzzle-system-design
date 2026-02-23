@@ -14,7 +14,7 @@ const TAG_INCOMING_UDP: u64 = 1;
 const TAG_OUTGOING_UDP: u64 = 2;
 
 const PKT_BUF_SIZE: usize = 2048; // Max standard UDP (+QUIC) MTU size
-const NUM_BUFFERS: u16 = 8192; // Max provided buffers in the slab
+const NUM_BUFFERS: u16 = 65535; // Maximum allowable provided buffers (u16 limit)
 const BGID: u16 = 0; // Buffer Group ID
 
 pub struct TxItem {
@@ -106,7 +106,7 @@ impl Framing {
 
 impl WorkerCore {
     pub fn new(master_queue: Arc<SpscRingBuffer<PixelWrite>>, port: u16) -> Self {
-        let tx_capacity = 4096;
+        let tx_capacity = 16384;
         let mut tx_items = Vec::with_capacity(tx_capacity);
         let mut tx_free_indices = Vec::with_capacity(tx_capacity);
         for i in 0..tx_capacity {
@@ -169,7 +169,7 @@ impl WorkerCore {
         IoUring::builder()
             .setup_coop_taskrun()
             .setup_single_issuer()
-            .build(256)
+            .build(32768)
             .expect("Failed to create io_uring")
     }
 
@@ -370,13 +370,13 @@ impl WorkerCore {
             self.handle_broadcast();
 
             let mut cqes_processed = 0;
-            let mut pending_cqes = [(0u64, 0i32, 0u32); 256];
+            let mut pending_cqes = Box::new([(0u64, 0i32, 0u32); 16384]);
             let mut parsed_count = 0;
 
             let mut completion = ring.completion();
             while let Some(cqe) = completion.next() {
                 cqes_processed += 1;
-                if parsed_count < 256 {
+                if parsed_count < 16384 {
                     pending_cqes[parsed_count] = (cqe.user_data(), cqe.result(), cqe.flags());
                     parsed_count += 1;
                 }

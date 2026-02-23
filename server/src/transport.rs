@@ -42,7 +42,7 @@ impl TransportState {
         // config.load_priv_key_from_pem_file("key.key").unwrap();
 
         Self {
-            connections: FxHashMap::default(),
+            connections: FxHashMap::with_capacity_and_hasher(10000, Default::default()),
             config,
         }
     }
