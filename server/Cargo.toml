@@ -1,0 +1,11 @@
+[package]
+name = "server"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+core_affinity = "0.8.3"
+io-uring = "0.7.11"
+quiche = "0.25.0"
+socket2 = "0.6.2"
+zstd = "0.13.3"
