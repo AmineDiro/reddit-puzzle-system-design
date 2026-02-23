@@ -56,24 +56,33 @@ pub fn spawn_csv_exporter(metrics: Arc<LoadMetrics>, worker_id: String) {
             .await;
 
         let mut file = match file_res {
-            Ok(f) => f,
-            Err(e) => {
-                eprintln!("Could not open metrics file at {}: {}", path, e);
+            Ok(f) => Some(f),
+            Err(_e) => {
                 // Fallback for local testing maybe?
-                let fallback = format!("./{}_data.csv", worker_id);
-                OpenOptions::new()
+                let fallback = format!("{}_data.csv", worker_id);
+                if let Ok(f) = OpenOptions::new()
                     .create(true)
                     .write(true)
                     .truncate(true)
                     .open(&fallback)
                     .await
-                    .unwrap()
+                {
+                    Some(f)
+                } else {
+                    eprintln!(
+                        "Could not open metrics file at {} or fallback {}, ignoring metrics reporting.",
+                        path, fallback
+                    );
+                    None
+                }
             }
         };
 
-        file.write_all(b"timestamp,active,failed,tx_pixels,rx_dgram_s,rx_mbps\n")
-            .await
-            .unwrap();
+        if let Some(ref mut f) = file {
+            let _ = f
+                .write_all(b"timestamp,active,failed,tx_pixels,rx_dgram_s,rx_mbps\n")
+                .await;
+        }
 
         let (mut last_dgrams, mut last_bytes) = (0, 0);
 
@@ -100,7 +109,9 @@ pub fn spawn_csv_exporter(metrics: Arc<LoadMetrics>, worker_id: String) {
                 mbps
             );
 
-            let _ = file.write_all(row.as_bytes()).await;
+            if let Some(ref mut f) = file {
+                let _ = f.write_all(row.as_bytes()).await;
+            }
 
             last_dgrams = current_dgrams;
             last_bytes = current_bytes;

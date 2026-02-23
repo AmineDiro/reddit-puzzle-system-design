@@ -108,9 +108,9 @@ async fn main() {
         let m = metrics.clone();
 
         tokio::spawn(async move {
-            let jitter = rand::thread_rng().gen_range(0..120_000);
-            sleep(Duration::from_millis(jitter)).await;
+            let jitter = rand::thread_rng().gen_range(0..10_000);
             simulate_user(ep, target, m).await;
+            sleep(Duration::from_millis(jitter)).await;
         });
     }
 

@@ -31,6 +31,7 @@ pub fn build_optimized_config() -> ClientConfig {
     let mut config = ClientConfig::new(Arc::new(crypto));
 
     let mut transport = quinn::TransportConfig::default();
+    // 1 min timeout
     transport.max_idle_timeout(Some(std::time::Duration::from_secs(60).try_into().unwrap()));
     transport.datagram_receive_buffer_size(Some(65536 * 4));
     config.transport_config(Arc::new(transport));
