@@ -32,8 +32,8 @@ services:
         ipv4_address: 10.5.0.10
     # Bind to CCX 0 (Threads 0,1,2 and siblings 6,7,8)
     cpuset: "0,1,2,6,7,8"
-    # 1 Master thread + 2 Worker threads
-    command: ["server", "--workers", "2"]
+    # 1 Master thread + 3 Worker threads
+    command: ["server", "--workers", "3"]
     ports:
       - "4433:4433/udp"
 
@@ -66,3 +66,19 @@ services:
         ipv4_address: 10.5.0.4
     cpuset: "5,11"
     command: ["./loadgen", "--target", "https://10.5.0.10:4433", "--clients", "15000", "--id", "worker_3"]
+
+  worker_4:
+    <<: *worker-base
+    networks:
+      canvas_net:
+        ipv4_address: 10.5.0.5
+    cpuset: "6,12"
+    command: ["./loadgen", "--target", "https://10.5.0.10:4433", "--clients", "15000", "--id", "worker_4"]
+
+  worker_5:
+    <<: *worker-base
+    networks:
+      canvas_net:
+        ipv4_address: 10.5.0.5
+    cpuset: "6,12"
+    command: ["./loadgen", "--target", "https://10.5.0.10:4433", "--clients", "15000", "--id", "worker_4"]
