@@ -33,6 +33,8 @@ fn main() {
 
     println!("Bare-metal canvas server initializing...");
 
+    let port = 4433;
+
     let core_ids = core_affinity::get_core_ids().expect("Failed to get core IDs");
     let num_cores = core_ids.len();
 
@@ -64,7 +66,7 @@ fn main() {
     for &core_id in &worker_cores {
         let queue = Arc::new(SpscRingBuffer::<PixelWrite>::new());
         worker_queues.push(queue.clone());
-        workers.push((WorkerCore::new(queue, 8080), core_id));
+        workers.push((WorkerCore::new(queue, port), core_id));
     }
 
     let master = MasterCore::new(worker_queues, canvas.clone());
