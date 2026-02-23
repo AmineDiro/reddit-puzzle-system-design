@@ -14,7 +14,23 @@ use crate::spsc::SpscRingBuffer;
 use crate::worker::WorkerCore;
 use std::sync::Arc;
 
+#[cfg(target_os = "linux")]
+fn maximize_memlock() {
+    unsafe {
+        let rlim = libc::rlimit {
+            rlim_cur: libc::RLIM_INFINITY,
+            rlim_max: libc::RLIM_INFINITY,
+        };
+        if libc::setrlimit(libc::RLIMIT_MEMLOCK, &rlim) != 0 {
+            println!("Warning: Failed to set RLIMIT_MEMLOCK to infinity. io_uring may fail.");
+        }
+    }
+}
+
 fn main() {
+    #[cfg(target_os = "linux")]
+    maximize_memlock();
+
     println!("Bare-metal canvas server initializing...");
 
     let core_ids = core_affinity::get_core_ids().expect("Failed to get core IDs");

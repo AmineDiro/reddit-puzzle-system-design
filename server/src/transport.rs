@@ -37,7 +37,7 @@ impl TransportState {
         // Required for WebTransport / Datagrams
         config.enable_dgram(true, 1000, 1000);
 
-        // Ideally load TLS certs here
+        // TODO? load TLS certs here
         // config.load_cert_chain_from_pem_file("cert.crt").unwrap();
         // config.load_priv_key_from_pem_file("key.key").unwrap();
 

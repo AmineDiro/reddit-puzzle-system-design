@@ -200,6 +200,20 @@ impl WorkerCore {
             .setup_coop_taskrun()
             .setup_single_issuer()
             .build(32768)
+            .or_else(|_| {
+                println!("Warning: Failed to create io_uring of size 32768, falling back to 16384");
+                IoUring::builder()
+                    .setup_coop_taskrun()
+                    .setup_single_issuer()
+                    .build(16384)
+            })
+            .or_else(|_| {
+                println!("Warning: Failed to create io_uring of size 16384, falling back to 8192");
+                IoUring::builder()
+                    .setup_coop_taskrun()
+                    .setup_single_issuer()
+                    .build(8192)
+            })
             .expect("Failed to create io_uring")
     }
 
