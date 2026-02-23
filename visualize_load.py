@@ -15,6 +15,11 @@ def merge_and_plot():
     for f in files:
         try:
             df = pd.read_csv(f)
+            df = df.sort_values('timestamp')
+            # Calculate per-worker rate from cumulative counter
+            df['tx_pixels_s'] = df['tx_pixels'].diff().fillna(0)
+            # Handle potential counter resets
+            df.loc[df['tx_pixels_s'] < 0, 'tx_pixels_s'] = 0
             dfs.append(df)
         except Exception as e:
             print(f"Error reading {f}: {e}")
@@ -39,10 +44,6 @@ def merge_and_plot():
     
     # 2. Datagrams per second & Pixels per second
     axes[1].plot(agg['timestamp'], agg['rx_dgram_s'], label='RX Datagrams/s', color='green')
-    
-    # Since tx_pixels is a cumulative counter in rust, we diff it to get per second rate
-    agg['tx_pixels_s'] = agg['tx_pixels'].diff().fillna(0)
-    
     axes[1].plot(agg['timestamp'], agg['tx_pixels_s'], label='TX Pixels/s', color='orange')
     axes[1].set_title('Throughput (Messages)')
     axes[1].set_ylabel('Messages / second')

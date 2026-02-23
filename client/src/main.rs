@@ -113,8 +113,8 @@ async fn main() {
 
         tokio::spawn(async move {
             let jitter = rand::thread_rng().gen_range(0..10_000);
-            simulate_user(ep, target, m).await;
             sleep(Duration::from_millis(jitter)).await;
+            simulate_user(ep, target, m).await;
         });
     }
 

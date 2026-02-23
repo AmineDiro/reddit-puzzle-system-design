@@ -48,8 +48,8 @@ impl TransportState {
         config.load_priv_key_from_pem_file("key.key").unwrap();
 
         Self {
-            connections: FxHashMap::with_capacity_and_hasher(10000, Default::default()),
-            cid_map: FxHashMap::with_capacity_and_hasher(10000, Default::default()),
+            connections: FxHashMap::with_capacity_and_hasher(100000, Default::default()),
+            cid_map: FxHashMap::with_capacity_and_hasher(100000, Default::default()),
             next_user_id: 0,
             config,
         }

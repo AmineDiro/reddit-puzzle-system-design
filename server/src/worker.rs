@@ -15,6 +15,7 @@ const TAG_OUTGOING_UDP: u64 = 2;
 
 const PKT_BUF_SIZE: usize = 2048; // Max standard UDP (+QUIC) MTU size
 const NUM_BUFFERS: u16 = 65535; // Maximum allowable provided buffers (u16 limit)
+const TX_CAPACITY: usize = 65536; // Increased from 16384
 const BGID: u16 = 0; // Buffer Group ID
 
 pub struct TxItem {
@@ -119,10 +120,9 @@ impl Framing {
 
 impl WorkerCore {
     pub fn new(master_queue: Arc<SpscRingBuffer<PixelWrite>>, port: u16) -> Self {
-        let tx_capacity = 16384;
-        let mut tx_items = Vec::with_capacity(tx_capacity);
-        let mut tx_free_indices = Vec::with_capacity(tx_capacity);
-        for i in 0..tx_capacity {
+        let mut tx_items = Vec::with_capacity(TX_CAPACITY);
+        let mut tx_free_indices = Vec::with_capacity(TX_CAPACITY);
+        for i in 0..TX_CAPACITY {
             tx_items.push(TxItem {
                 buf: [0; 1500],
                 addr: unsafe { std::mem::zeroed() },
@@ -197,6 +197,13 @@ impl WorkerCore {
         }
 
         let addr: std::net::SocketAddr = format!("0.0.0.0:{}", self.port).parse().unwrap();
+
+        // Increase Kernel UDP buffers
+        let rcv_buf = 32 * 1024 * 1024; // 32MB
+        let snd_buf = 32 * 1024 * 1024; // 32MB
+        socket.set_recv_buffer_size(rcv_buf).unwrap();
+        socket.set_send_buffer_size(snd_buf).unwrap();
+
         socket.bind(&addr.into()).unwrap();
         socket
     }
