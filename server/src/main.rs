@@ -31,7 +31,7 @@ fn main() {
     let master_core_id = core_ids[0].id;
     let broadcast_core_id = core_ids[1].id;
 
-    let worker_cores = core_ids.iter().skip(2).map(|c| c.id).collect();
+    let worker_cores: Vec<usize> = core_ids.iter().skip(2).map(|c| c.id).collect();
 
     println!(
         "Topology: 1 Master (Core {}), 1 Broadcast (Core {}), {} Workers",

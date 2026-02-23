@@ -1,0 +1,139 @@
+    Updating crates.io index
+ Downloading crates ...
+  Downloaded cmake v0.1.57
+  Downloaded cfg-if v1.0.4
+  Downloaded log v0.4.29
+  Downloaded bitflags v2.11.0
+  Downloaded memoffset v0.9.1
+  Downloaded num_cpus v1.17.0
+  Downloaded shlex v1.3.0
+  Downloaded pkg-config v0.3.32
+  Downloaded octets v0.3.4
+  Downloaded slab v0.4.12
+  Downloaded autocfg v1.5.0
+  Downloaded core_affinity v0.8.3
+  Downloaded zstd v0.13.3
+  Downloaded either v1.15.0
+  Downloaded cc v1.2.56
+  Downloaded rustc-hash v2.1.1
+  Downloaded unicode-ident v1.0.24
+  Downloaded quote v1.0.44
+  Downloaded enum_dispatch v0.3.13
+  Downloaded jobserver v0.1.34
+  Downloaded find-msvc-tools v0.1.9
+  Downloaded proc-macro2 v1.0.106
+  Downloaded zstd-safe v7.2.4
+  Downloaded smallvec v1.15.1
+  Downloaded once_cell v1.21.3
+  Downloaded socket2 v0.6.2
+  Downloaded intrusive-collections v0.9.7
+  Downloaded io-uring v0.7.11
+  Downloaded libm v0.2.16
+  Downloaded syn v2.0.117
+  Downloaded libc v0.2.182
+  Downloaded zstd-sys v2.0.16+zstd.1.5.7
+  Downloaded quiche v0.25.0
+   Compiling zstd-sys v2.0.16+zstd.1.5.7
+   Compiling quiche v0.25.0
+   Compiling zstd-safe v7.2.4
+   Compiling zstd v0.13.3
+   Compiling server v0.1.0 (/usr/src/bare-metal-canvas/server)
+error[E0433]: failed to resolve: could not find `SendTo` in `opcode`
+   --> server/src/worker.rs:312:48
+    |
+312 |                         let send_sqe = opcode::SendTo::new(
+    |                                                ^^^^^^
+    |                                                |
+    |                                                could not find `SendTo` in `opcode`
+    |                                                help: a struct with a similar name exists: `Send`
+
+warning: unused import: `PixelDatagram`
+ --> server/src/worker.rs:5:24
+  |
+5 | use crate::transport::{PixelDatagram, TransportState};
+  |                        ^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `cqueue`
+ --> server/src/worker.rs:6:25
+  |
+6 | use io_uring::{IoUring, cqueue, opcode, types};
+  |                         ^^^^^^
+
+error[E0308]: mismatched types
+  --> server/src/transport.rs:63:37
+   |
+63 |         Ok(self.connections.get_mut(scid).unwrap())
+   |                             ------- ^^^^ expected `&_`, found `ConnectionId<'_>`
+   |                             |
+   |                             arguments to this method are incorrect
+   |
+   = note: expected reference `&_`
+                 found struct `ConnectionId<'_>`
+note: method defined here
+  --> /rustc/01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf/library/std/src/collections/hash/map.rs:1171:12
+help: consider borrowing here
+   |
+63 |         Ok(self.connections.get_mut(&scid).unwrap())
+   |                                     +
+
+error[E0277]: the trait bound `Vec<u8>: Borrow<ConnectionId<'_>>` is not satisfied
+  --> server/src/transport.rs:77:54
+   |
+77 |         let conn = if !self.connections.contains_key(&hdr.dcid) {
+   |                                         ------------ ^^^^^^^^^ the trait `Borrow<ConnectionId<'_>>` is not implemented for `Vec<u8>`
+   |                                         |
+   |                                         required by a bound introduced by this call
+   |
+help: the trait `Borrow<ConnectionId<'_>>` is not implemented for `Vec<u8>`
+      but trait `Borrow<[u8]>` is implemented for it
+  --> /rustc/01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf/library/alloc/src/slice.rs:789:1
+   = help: for that trait implementation, expected `[u8]`, found `ConnectionId<'_>`
+note: required by a bound in `HashMap::<K, V, S>::contains_key`
+  --> /rustc/01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf/library/std/src/collections/hash/map.rs:1143:5
+
+error[E0277]: the trait bound `Vec<u8>: Borrow<ConnectionId<'_>>` is not satisfied
+  --> server/src/transport.rs:87:38
+   |
+87 |             self.connections.get_mut(&hdr.dcid).unwrap()
+   |                              ------- ^^^^^^^^^ the trait `Borrow<ConnectionId<'_>>` is not implemented for `Vec<u8>`
+   |                              |
+   |                              required by a bound introduced by this call
+   |
+help: the trait `Borrow<ConnectionId<'_>>` is not implemented for `Vec<u8>`
+      but trait `Borrow<[u8]>` is implemented for it
+  --> /rustc/01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf/library/alloc/src/slice.rs:789:1
+   = help: for that trait implementation, expected `[u8]`, found `ConnectionId<'_>`
+note: required by a bound in `HashMap::<K, V, S>::get_mut`
+  --> /rustc/01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf/library/std/src/collections/hash/map.rs:1171:5
+
+error[E0599]: no method named `set_reuseport` found for struct `socket2::Socket` in the current scope
+   --> server/src/worker.rs:159:16
+    |
+159 |         socket.set_reuseport(true).unwrap();
+    |                ^^^^^^^^^^^^^ method not found in `socket2::Socket`
+
+warning: value assigned to `seq` is never read
+  --> server/src/broadcast.rs:50:27
+   |
+50 |             let mut seq = 0;
+   |                           ^
+   |
+   = help: maybe it is overwritten before being read?
+   = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+  --> server/src/main.rs:61:10
+   |
+61 |     for (mut worker, core_id) in workers {
+   |          ----^^^^^^
+   |          |
+   |          help: remove this `mut`
+   |
+   = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+Some errors have detailed explanations: E0277, E0308, E0433, E0599.
+For more information about an error, try `rustc --explain E0277`.
+warning: `server` (bin "server") generated 4 warnings
+error: could not compile `server` (bin "server") due to 5 previous errors; 4 warnings emitted

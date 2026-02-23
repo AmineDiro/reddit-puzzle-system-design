@@ -1,5 +1,8 @@
 FROM rust:latest as builder
 
+# Install build dependencies
+RUN apt-get update && apt-get install -y cmake clang pkg-config && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /usr/src/bare-metal-canvas
 # Copy workspace config
 COPY Cargo.toml ./

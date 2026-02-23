@@ -3,7 +3,7 @@ use crate::master::PixelWrite;
 use crate::spsc::SpscRingBuffer;
 use crate::timing_wheel::TimingWheel;
 use crate::transport::{PixelDatagram, TransportState};
-use io_uring::{IoUring, cqe, opcode, types};
+use io_uring::{IoUring, cqueue, opcode, types};
 use socket2::{Domain, Protocol, Socket, Type};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::os::unix::io::AsRawFd;
@@ -20,12 +20,14 @@ const BGID: u16 = 0; // Buffer Group ID
 pub struct TxItem {
     pub buf: [u8; 1500],
     pub addr: libc::sockaddr_in,
+    pub iov: libc::iovec,
+    pub msghdr: libc::msghdr,
 }
 
 pub struct WorkerCore {
     master_queue: Arc<SpscRingBuffer<PixelWrite>>,
     cooldown_master: CooldownArray,
-    timing_wheel: TimingWheel,
+    timing_wheel: Box<TimingWheel>,
     port: u16,
     buffer_slab: Vec<u8>,
     transport: TransportState,
@@ -33,7 +35,11 @@ pub struct WorkerCore {
     last_broadcast_index: usize,
     tx_items: Box<[TxItem]>,
     tx_free_indices: Vec<usize>,
+    msghdr: Box<libc::msghdr>,
 }
+
+unsafe impl Send for WorkerCore {}
+unsafe impl Sync for WorkerCore {}
 
 pub struct RecvMsgFrame<'a> {
     pub peer_addr: SocketAddr,
@@ -113,6 +119,8 @@ impl WorkerCore {
             tx_items.push(TxItem {
                 buf: [0; 1500],
                 addr: unsafe { std::mem::zeroed() },
+                iov: unsafe { std::mem::zeroed() },
+                msghdr: unsafe { std::mem::zeroed() },
             });
             tx_free_indices.push(i);
         }
@@ -120,7 +128,7 @@ impl WorkerCore {
         Self {
             master_queue,
             cooldown_master: CooldownArray::new(),
-            timing_wheel: TimingWheel::new(),
+            timing_wheel: Box::new(TimingWheel::new()),
             port,
             buffer_slab: vec![0; PKT_BUF_SIZE * (NUM_BUFFERS as usize)],
             transport: TransportState::new(),
@@ -128,6 +136,12 @@ impl WorkerCore {
             last_broadcast_index: 0,
             tx_items: tx_items.into_boxed_slice(),
             tx_free_indices,
+            msghdr: Box::new(unsafe {
+                let mut msghdr: libc::msghdr = std::mem::zeroed();
+                msghdr.msg_namelen = std::mem::size_of::<libc::sockaddr_in>() as _;
+                msghdr.msg_controllen = 64; // Enough for IP_PKTINFO
+                msghdr
+            }),
         }
     }
 
@@ -146,7 +160,23 @@ impl WorkerCore {
     #[cfg(target_os = "linux")]
     fn setup_socket(&self) -> Socket {
         let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP)).unwrap();
-        socket.set_reuse_port(true).unwrap();
+        unsafe {
+            let opt: libc::c_int = 1;
+            libc::setsockopt(
+                socket.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_REUSEPORT,
+                &opt as *const _ as *const libc::c_void,
+                std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+            );
+            libc::setsockopt(
+                socket.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_REUSEADDR,
+                &opt as *const _ as *const libc::c_void,
+                std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+            );
+        }
 
         unsafe {
             let opt: libc::c_int = 1;
@@ -246,8 +276,8 @@ impl WorkerCore {
                     self.cooldown_master.set_cooldown(user_id);
                     self.timing_wheel.add_cooldown(user_id);
                     let _ = self.master_queue.push(PixelWrite {
-                        x: p.x as usize,
-                        y: p.y as usize,
+                        x: p.x,
+                        y: p.y,
                         color: p.color,
                     });
                 }
@@ -269,8 +299,8 @@ impl WorkerCore {
             ring.submission().push(&replenish_sqe).unwrap();
         }
 
-        if !cqe::more(flags) {
-            let recv = opcode::RecvMsgMulti::new(fd_types, BGID)
+        if !io_uring::cqueue::more(flags) {
+            let recv = opcode::RecvMsgMulti::new(fd_types, self.msghdr.as_ref() as *const _, BGID)
                 .build()
                 .user_data(TAG_INCOMING_UDP);
             unsafe {
@@ -297,17 +327,19 @@ impl WorkerCore {
 
                         item.addr.sin_family = libc::AF_INET as u16;
                         item.addr.sin_port = dest_addr.port().to_be();
-                        item.addr.sin_addr.s_addr = u32::from(dest_addr.ip()).to_be();
+                        item.addr.sin_addr.s_addr = u32::from(dest_addr.ip().clone()).to_be();
 
-                        let send_sqe = opcode::SendTo::new(
-                            fd_types,
-                            item.buf.as_ptr(),
-                            len as u32,
-                            &item.addr as *const _ as *const libc::sockaddr,
-                            std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
-                        )
-                        .build()
-                        .user_data(TAG_OUTGOING_UDP | ((idx as u64) << 8));
+                        item.iov.iov_base = item.buf.as_mut_ptr() as *mut _;
+                        item.iov.iov_len = len as _;
+
+                        item.msghdr.msg_name = &mut item.addr as *mut _ as *mut _;
+                        item.msghdr.msg_namelen = std::mem::size_of::<libc::sockaddr_in>() as _;
+                        item.msghdr.msg_iov = &mut item.iov;
+                        item.msghdr.msg_iovlen = 1;
+
+                        let send_sqe = opcode::SendMsg::new(fd_types, &item.msghdr)
+                            .build()
+                            .user_data(TAG_OUTGOING_UDP | ((idx as u64) << 8));
 
                         unsafe {
                             ring.submission().push(&send_sqe).expect("SQ full");
@@ -345,7 +377,7 @@ impl WorkerCore {
         self.provide_initial_buffers(&mut ring);
 
         let fd_types = types::Fd(fd);
-        let recv = opcode::RecvMsgMulti::new(fd_types, BGID)
+        let recv = opcode::RecvMsgMulti::new(fd_types, self.msghdr.as_ref() as *const _, BGID)
             .build()
             .user_data(TAG_INCOMING_UDP);
 

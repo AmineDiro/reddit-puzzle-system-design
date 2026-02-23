@@ -7,31 +7,31 @@ pub struct BroadcastCore {
     interval: Duration,
 }
 
-fn rle_compress(data: &[u8]) -> Vec<u8> {
-    if data.is_empty() {
-        return Vec::new();
-    }
-
-    let mut compressed = Vec::with_capacity(CANVAS_SIZE / 4);
-    let mut last_val = data[0];
-    let mut count: u8 = 1;
-
-    for &val in data.iter().skip(1) {
-        if val == last_val && count < 255 {
-            count += 1;
-        } else {
-            compressed.push(count);
-            compressed.push(last_val);
-            last_val = val;
-            count = 1;
-        }
-    }
-    compressed.push(count);
-    compressed.push(last_val);
-    compressed
-}
-
 impl BroadcastCore {
+    fn rle_compress(data: &[u8]) -> Vec<u8> {
+        if data.is_empty() {
+            return Vec::new();
+        }
+
+        let mut compressed = Vec::with_capacity(CANVAS_SIZE / 4);
+        let mut last_val = data[0];
+        let mut count: u8 = 1;
+
+        for &val in data.iter().skip(1) {
+            if val == last_val && count < 255 {
+                count += 1;
+            } else {
+                compressed.push(count);
+                compressed.push(last_val);
+                last_val = val;
+                count = 1;
+            }
+        }
+        compressed.push(count);
+        compressed.push(last_val);
+        compressed
+    }
+
     pub fn new() -> Self {
         Self {
             interval: Duration::from_secs(5),

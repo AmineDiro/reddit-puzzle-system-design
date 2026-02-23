@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::AtomicUsize;
 
 pub const CANVAS_WIDTH: usize = 1000;
 pub const CANVAS_HEIGHT: usize = 1000;

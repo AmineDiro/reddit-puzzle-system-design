@@ -29,9 +29,9 @@ impl TransportState {
         config.set_initial_max_data(10_000_000);
         config.set_initial_max_stream_data_bidi_local(1_000_000);
         config.set_initial_max_stream_data_bidi_remote(1_000_000);
-        config.set_initial_max_stream_data_unidi(1_000_000);
+        config.set_initial_max_stream_data_uni(1_000_000);
         config.set_initial_max_streams_bidi(100);
-        config.set_initial_max_streams_unidi(100);
+        config.set_initial_max_streams_uni(100);
         config.set_disable_active_migration(true);
 
         // Required for WebTransport / Datagrams
@@ -54,11 +54,13 @@ impl TransportState {
         local: SocketAddr,
         peer: SocketAddr,
     ) -> Result<&mut Connection, quiche::Error> {
-        let conn = quiche::accept(scid, odcid, local, peer, &mut self.config)?;
+        let scid = quiche::ConnectionId::from_ref(scid);
+        let odcid = odcid.map(quiche::ConnectionId::from_ref);
+        let conn = quiche::accept(&scid, odcid.as_ref(), local, peer, &mut self.config)?;
 
         println!("Accepted new QUIC connection ID: {:?}", scid);
         self.connections.insert(scid.to_vec(), conn);
-        Ok(self.connections.get_mut(scid).unwrap())
+        Ok(self.connections.get_mut(scid.as_ref()).unwrap())
     }
 
     pub fn handle_incoming(
@@ -67,22 +69,22 @@ impl TransportState {
         peer: SocketAddr,
         local: SocketAddr,
     ) -> Option<Vec<PixelDatagram>> {
-        let mut hdr = match quiche::Header::parse(buf, None) {
+        let mut hdr = match quiche::Header::from_slice(buf, quiche::MAX_CONN_ID_LEN) {
             Ok(v) => v,
             Err(_) => return None,
         };
 
-        let conn = if !self.connections.contains_key(&hdr.dcid) {
+        let conn = if !self.connections.contains_key(&hdr.dcid[..]) {
             // New connection? Handle version negotiation/handshake
             if hdr.ty != quiche::Type::Initial {
                 return None;
             }
-            match self.accept_connection(&hdr.dcid, None, local, peer) {
+            match self.accept_connection(&hdr.dcid[..], None, local, peer) {
                 Ok(c) => c,
                 Err(_) => return None,
             }
         } else {
-            self.connections.get_mut(&hdr.dcid).unwrap()
+            self.connections.get_mut(&hdr.dcid[..]).unwrap()
         };
 
         let recv_info = RecvInfo {
