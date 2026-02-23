@@ -17,14 +17,8 @@ x-common-config: &common-config
       hard: 1048576
     memlock: -1
   sysctls:
-    # Kernel optimizations for high-throughput UDP/QUIC
-    - net.core.rmem_max=33554432
-    - net.core.wmem_max=33554432
-    - net.core.rmem_default=33554432
-    - net.core.wmem_default=33554432
-    - net.core.netdev_max_backlog=50000
-    - net.ipv4.udp_rmem_min=16384
-    - net.ipv4.udp_wmem_min=16384
+    # Namespaced sysctls only. 
+    # Global ones (net.core.*) must be set on the host using run_optimized.sh
     - net.ipv4.ip_local_port_range=1024 65535
 
 services:
