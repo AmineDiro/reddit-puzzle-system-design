@@ -95,7 +95,7 @@ impl TransportState {
             rand::thread_rng().fill(&mut scid);
 
             match self.accept_connection(&scid[..], Some(&hdr.dcid[..]), local, peer) {
-                Ok(tuple) => (tuple.0, &mut tuple.1),
+                Ok((user_id, mut conn)) => (user_id, &mut conn),
                 Err(e) => {
                     #[cfg(feature = "debug-logs")]
                     println!("Failed to accept connection: {:?}", e);
