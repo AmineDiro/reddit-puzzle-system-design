@@ -61,6 +61,7 @@ impl TransportState {
         let odcid = odcid.map(quiche::ConnectionId::from_ref);
         let conn = quiche::accept(&scid, odcid.as_ref(), local, peer, &mut self.config)?;
 
+        #[cfg(feature = "debug-logs")]
         println!("Accepted new QUIC connection ID: {:?}", scid);
         self.connections.insert(scid.to_vec(), conn);
         Ok(self.connections.get_mut(scid.as_ref()).unwrap())
@@ -112,6 +113,8 @@ impl TransportState {
         if pixels.is_empty() {
             None
         } else {
+            #[cfg(feature = "debug-logs")]
+            println!("Received {} pixels from {:?}", pixels.len(), peer);
             Some(pixels)
         }
     }

@@ -29,12 +29,19 @@ async fn simulate_user(
     target: String,
     metrics: Arc<metrics::LoadMetrics>,
 ) {
+    #[cfg(feature = "debug-logs")]
+    println!("Client {} connecting to {}...", metrics.id, target);
+
     let conn: wtransport::Connection = match endpoint.connect(target).await {
         Ok(c) => {
+            #[cfg(feature = "debug-logs")]
+            println!("Client {} connected successfully!", metrics.id);
             metrics.active.add(1);
             c
         }
-        Err(_) => {
+        Err(e) => {
+            #[cfg(feature = "debug-logs")]
+            println!("Client {} failed to connect: {:?}", metrics.id, e);
             metrics.failed.add(1);
             return;
         }
@@ -42,12 +49,26 @@ async fn simulate_user(
 
     loop {
         tokio::select! {
-            Ok(dgram) = conn.receive_datagram() => {
-                metrics.rx_datagrams.add(1);
-                metrics.rx_bytes.add(dgram.payload().len());
+            result = conn.receive_datagram() => {
+                match result {
+                    Ok(dgram) => {
+                        #[cfg(feature = "debug-logs")]
+                        println!("Client {} received datagram of {} bytes", metrics.id, dgram.payload().len());
+                        metrics.rx_datagrams.add(1);
+                        metrics.rx_bytes.add(dgram.payload().len());
+                    }
+                    Err(e) => {
+                        #[cfg(feature = "debug-logs")]
+                        println!("Client {} connection error: {:?}", metrics.id, e);
+                        break;
+                    }
+                }
             }
-            _ = sleep(Duration::from_secs(rand::thread_rng().gen_range(280..320))) => {
-                if conn.send_datagram(b"x:100,y:200,color:FFF").is_ok() {
+            _ = sleep(Duration::from_secs(rand::thread_rng().gen_range(1..10))) => {
+                let payload = b"x:100,y:200,color:FFF";
+                #[cfg(feature = "debug-logs")]
+                println!("Client {} sending pixel datagram...", metrics.id);
+                if conn.send_datagram(payload).is_ok() {
                     metrics.tx_pixels.add(1);
                 }
             }
@@ -60,7 +81,7 @@ async fn main() {
     let args = Args::parse();
     let config = tls::build_optimized_config();
     let endpoint = Arc::new(Endpoint::client(config).unwrap());
-    let metrics = metrics::LoadMetrics::new();
+    let metrics = metrics::LoadMetrics::new(args.id.clone());
 
     metrics::spawn_csv_exporter(metrics.clone(), args.id.clone());
 

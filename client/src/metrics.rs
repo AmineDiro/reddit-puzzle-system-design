@@ -22,6 +22,7 @@ impl AlignedAtomic {
 }
 
 pub struct LoadMetrics {
+    pub id: String,
     pub active: AlignedAtomic,
     pub failed: AlignedAtomic,
     pub tx_pixels: AlignedAtomic,
@@ -30,8 +31,9 @@ pub struct LoadMetrics {
 }
 
 impl LoadMetrics {
-    pub fn new() -> Arc<Self> {
+    pub fn new(id: String) -> Arc<Self> {
         Arc::new(Self {
+            id,
             active: AlignedAtomic::new(0),
             failed: AlignedAtomic::new(0),
             tx_pixels: AlignedAtomic::new(0),

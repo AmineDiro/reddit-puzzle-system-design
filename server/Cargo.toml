@@ -12,3 +12,6 @@ rcgen = "0.13.1"
 rustc-hash = "2.1.1"
 socket2 = "0.6.2"
 zstd = "0.13.3"
+
+[features]
+debug-logs = []
