@@ -28,6 +28,10 @@ impl MasterCore {
             // Successfully pinned
         }
 
+        let mut ticks = 0u64;
+        let mut last_broadcast = std::time::Instant::now();
+        let broadcast_interval = std::time::Duration::from_millis(50);
+
         loop {
             let seq = CANVAS_SEQ.load(Ordering::Relaxed);
 
@@ -48,6 +52,20 @@ impl MasterCore {
 
             // Sequence lock write end (make even)
             CANVAS_SEQ.store(seq.wrapping_add(1), Ordering::Release);
+
+            ticks = ticks.wrapping_add(1);
+            if ticks & 2047 == 0 {
+                let now = std::time::Instant::now();
+                if now.duration_since(last_broadcast) >= broadcast_interval {
+                    let current_active = crate::canvas::ACTIVE_INDEX.load(Ordering::Relaxed);
+                    let next_active = (current_active + 1) & 15;
+
+                    self.canvas.snapshot_to_pool(next_active);
+                    crate::canvas::ACTIVE_INDEX.store(next_active, Ordering::Release);
+
+                    last_broadcast = now;
+                }
+            }
 
             std::hint::spin_loop();
         }

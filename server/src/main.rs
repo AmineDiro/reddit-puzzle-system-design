@@ -7,7 +7,6 @@ pub mod timing_wheel;
 pub mod transport;
 pub mod worker;
 
-use crate::broadcast::BroadcastCore;
 use crate::canvas::Canvas;
 use crate::master::{MasterCore, PixelWrite};
 use crate::spsc::SpscRingBuffer;
@@ -43,18 +42,15 @@ fn main() {
     }
 
     // Partition Cores
-    // Core 0: Master (Primary writer)
-    // Core 1: Broadcast (Compressor/Publisher)
-    // Cores 2+: Workers (Ingress/Validation)
+    // Core 0: Master (Primary writer + Broadcast)
+    // Cores 1+: Workers (Ingress/Validation)
     let master_core_id = core_ids[0].id;
-    let broadcast_core_id = core_ids[1].id;
 
-    let worker_cores: Vec<usize> = core_ids.iter().skip(2).map(|c| c.id).collect();
+    let worker_cores: Vec<usize> = core_ids.iter().skip(1).map(|c| c.id).collect();
 
     println!(
-        "Topology: 1 Master (Core {}), 1 Broadcast (Core {}), {} Workers",
+        "Topology: 1 Master (Core {}), {} Workers",
         master_core_id,
-        broadcast_core_id,
         worker_cores.len()
     );
 
@@ -70,7 +66,7 @@ fn main() {
     }
 
     let master = MasterCore::new(worker_queues, canvas.clone());
-    let broadcast = BroadcastCore::new();
+    // (BroadcastCore removed)
 
     // Spawn Threads
     let mut handles = Vec::new();
@@ -82,13 +78,7 @@ fn main() {
         }));
     }
 
-    // 2. Spawn Broadcast
-    let canvas_for_broadcast = canvas.clone();
-    handles.push(std::thread::spawn(move || {
-        broadcast.run(broadcast_core_id, canvas_for_broadcast);
-    }));
-
-    // 3. Run Master on main thread
+    // 2. Run Master on main thread
     println!("Starting Master loop on core {}...", master_core_id);
     master.run(master_core_id);
 
