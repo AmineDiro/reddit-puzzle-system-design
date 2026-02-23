@@ -788,6 +788,7 @@ dependencies = [
  "io-uring",
  "libc",
  "quiche",
+ "rand",
  "rcgen",
  "rustc-hash 2.1.1",
  "socket2 0.6.2",

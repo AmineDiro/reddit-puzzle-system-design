@@ -1,4 +1,5 @@
 use quiche::{Connection, RecvInfo};
+use rand::Rng;
 use rustc_hash::FxHashMap;
 use std::net::SocketAddr;
 
@@ -11,7 +12,8 @@ pub struct PixelDatagram {
 
 pub struct TransportState {
     // Map of QUIC Source Connection ID -> Active Connection (Thread local)
-    pub connections: FxHashMap<Vec<u8>, Connection>,
+    pub connections: FxHashMap<Vec<u8>, (u32, Connection)>,
+    pub next_user_id: u32,
 
     // Quiche backend config
     pub config: quiche::Config,
@@ -46,6 +48,7 @@ impl TransportState {
 
         Self {
             connections: FxHashMap::with_capacity_and_hasher(10000, Default::default()),
+            next_user_id: 0,
             config,
         }
     }
@@ -56,15 +59,19 @@ impl TransportState {
         odcid: Option<&[u8]>,
         local: SocketAddr,
         peer: SocketAddr,
-    ) -> Result<&mut Connection, quiche::Error> {
-        let scid = quiche::ConnectionId::from_ref(scid);
-        let odcid = odcid.map(quiche::ConnectionId::from_ref);
-        let conn = quiche::accept(&scid, odcid.as_ref(), local, peer, &mut self.config)?;
+    ) -> Result<(u32, Connection), quiche::Error> {
+        let scid_val = quiche::ConnectionId::from_ref(scid);
+        let odcid_val = odcid.map(quiche::ConnectionId::from_ref);
+        let conn = quiche::accept(&scid_val, odcid_val.as_ref(), local, peer, &mut self.config)?;
+
+        // Modulo 65536 to fit within CooldownArray (1024 * 64 bits)
+        let user_id = self.next_user_id % (crate::cooldown::COOLDOWN_ARRAY_LEN as u32 * 64);
+        self.next_user_id = self.next_user_id.wrapping_add(1);
 
         #[cfg(feature = "debug-logs")]
-        println!("Accepted new QUIC connection ID: {:?}", scid);
-        self.connections.insert(scid.to_vec(), conn);
-        Ok(self.connections.get_mut(scid.as_ref()).unwrap())
+        println!("Accepted new QUIC connection ID: {:?}", scid_val);
+        self.connections.insert(scid.to_vec(), (user_id, conn));
+        Ok((user_id, conn))
     }
 
     pub fn handle_incoming(
@@ -72,19 +79,23 @@ impl TransportState {
         buf: &mut [u8],
         peer: SocketAddr,
         local: SocketAddr,
-    ) -> Option<Vec<PixelDatagram>> {
+    ) -> Option<(u32, Vec<PixelDatagram>)> {
         let mut hdr = match quiche::Header::from_slice(buf, quiche::MAX_CONN_ID_LEN) {
             Ok(v) => v,
             Err(_) => return None,
         };
 
-        let conn = if !self.connections.contains_key(&hdr.dcid[..]) {
+        let (user_id, conn) = if !self.connections.contains_key(&hdr.dcid[..]) {
             // New connection? Handle version negotiation/handshake
             if hdr.ty != quiche::Type::Initial {
                 return None;
             }
-            match self.accept_connection(&hdr.dcid[..], Some(&hdr.dcid[..]), local, peer) {
-                Ok(c) => c,
+
+            let mut scid = [0; quiche::MAX_CONN_ID_LEN];
+            rand::thread_rng().fill(&mut scid);
+
+            match self.accept_connection(&scid[..], Some(&hdr.dcid[..]), local, peer) {
+                Ok(tuple) => (tuple.0, &mut tuple.1),
                 Err(e) => {
                     #[cfg(feature = "debug-logs")]
                     println!("Failed to accept connection: {:?}", e);
@@ -92,7 +103,8 @@ impl TransportState {
                 }
             }
         } else {
-            self.connections.get_mut(&hdr.dcid[..]).unwrap()
+            let tuple = self.connections.get_mut(&hdr.dcid[..]).unwrap();
+            (tuple.0, &mut tuple.1)
         };
 
         let recv_info = RecvInfo {
@@ -119,7 +131,7 @@ impl TransportState {
         } else {
             #[cfg(feature = "debug-logs")]
             println!("Received {} pixels from {:?}", pixels.len(), peer);
-            Some(pixels)
+            Some((user_id, pixels))
         }
     }
 }

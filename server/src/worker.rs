@@ -288,7 +288,7 @@ impl WorkerCore {
             // Grab the newly compressed buffer without allocating or locking
             let buffer_slice = unsafe { &crate::canvas::BUFFER_POOL[current_active].data[..1200] };
 
-            for conn in self.transport.connections.values_mut() {
+            for (_, conn) in self.transport.connections.values_mut() {
                 // NOTE:
                 // Just puts in quiche state, not sending yet !!
                 let _ = conn.dgram_send(buffer_slice);
@@ -308,12 +308,11 @@ impl WorkerCore {
 
         let frame = self.framing.parse(buf);
 
-        if let Some(pixels) =
+        if let Some((user_id, pixels)) =
             self.transport
                 .handle_incoming(frame.payload, frame.peer_addr, frame.local_addr)
         {
             for p in pixels {
-                let user_id = p.color as u32;
                 if !self.cooldown_master.is_on_cooldown(user_id) {
                     self.cooldown_master.set_cooldown(user_id);
                     self.timing_wheel.add_cooldown(user_id);
@@ -354,7 +353,7 @@ impl WorkerCore {
     #[cfg(target_os = "linux")]
     fn flush_outgoing(&mut self, ring: &mut IoUring, fd_types: types::Fd) -> usize {
         let mut sqes_added = 0;
-        for conn in self.transport.connections.values_mut() {
+        for (_, conn) in self.transport.connections.values_mut() {
             while let Some(idx) = self.tx_free_indices.pop() {
                 let item = &mut self.tx_items[idx];
                 match conn.send(&mut item.buf) {
@@ -400,13 +399,13 @@ impl WorkerCore {
 
     #[cfg(target_os = "linux")]
     fn maintain_connections(&mut self) {
-        for conn in self.transport.connections.values_mut() {
+        for (_, conn) in self.transport.connections.values_mut() {
             conn.on_timeout();
         }
 
         self.transport
             .connections
-            .retain(|_, conn| !conn.is_closed());
+            .retain(|_, (_, conn)| !conn.is_closed());
     }
 
     #[cfg(target_os = "linux")]
