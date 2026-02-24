@@ -129,7 +129,7 @@ impl MasterCore {
             }
 
             // Sequence lock write end (make even)
-            CANVAS_SEQ.store(seq.wrapping_add(1), Ordering::Release);
+            CANVAS_SEQ.store(seq.wrapping_add(2), Ordering::Release);
 
             let now = self.clock.now_ms();
             if now.wrapping_sub(last_broadcast_time) >= broadcast_threshold_ms {
