@@ -27,6 +27,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      network: host
     networks:
       canvas_net:
         ipv4_address: 10.5.0.10
@@ -42,6 +43,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.loadgen
+      network: host
     networks:
       canvas_net:
         ipv4_address: 10.5.0.2
