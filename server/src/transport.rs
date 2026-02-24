@@ -10,14 +10,28 @@ pub struct PixelDatagram {
     pub color: u8,
 }
 
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+pub struct SourceConnectionId(pub Vec<u8>);
+
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+pub struct DestinationConnectionId(pub Vec<u8>);
+
+pub const MAX_CONNECTIONS: usize = crate::cooldown::COOLDOWN_ARRAY_LEN * 64;
+
 pub struct TransportState {
     // Map of QUIC Source Connection ID -> Active Connection (Thread local)
-    pub connections: FxHashMap<Vec<u8>, (u32, Connection)>,
-    pub cid_map: FxHashMap<Vec<u8>, Vec<u8>>,
-    pub next_user_id: u32,
+    pub connections: FxHashMap<SourceConnectionId, (u32, Connection, DestinationConnectionId)>,
+    pub cid_map: FxHashMap<DestinationConnectionId, SourceConnectionId>,
+    pub free_user_ids: Vec<u32>,
 
     // Quiche backend config
     pub config: quiche::Config,
+}
+
+impl Default for TransportState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl TransportState {
@@ -47,10 +61,12 @@ impl TransportState {
         config.load_cert_chain_from_pem_file("cert.crt").unwrap();
         config.load_priv_key_from_pem_file("key.key").unwrap();
 
+        let mut free_user_ids: Vec<u32> = (0..MAX_CONNECTIONS as u32).collect();
+
         Self {
-            connections: FxHashMap::with_capacity_and_hasher(100000, Default::default()),
-            cid_map: FxHashMap::with_capacity_and_hasher(100000, Default::default()),
-            next_user_id: 0,
+            connections: FxHashMap::with_capacity_and_hasher(MAX_CONNECTIONS, Default::default()),
+            cid_map: FxHashMap::with_capacity_and_hasher(MAX_CONNECTIONS, Default::default()),
+            free_user_ids,
             config,
         }
     }
@@ -58,23 +74,102 @@ impl TransportState {
     pub fn accept_connection(
         &mut self,
         scid: &[u8],
+        dcid: &[u8],
         odcid: Option<&[u8]>,
         local: SocketAddr,
         peer: SocketAddr,
     ) -> Result<(), quiche::Error> {
+        if self.free_user_ids.is_empty() {
+            #[cfg(feature = "debug-logs")]
+            println!("Worker at capacity, rejecting connection from {:?}", peer);
+            return Err(quiche::Error::Done); // Or another appropriate error
+        }
+
         let scid_val = quiche::ConnectionId::from_ref(scid);
         let odcid_val = odcid.map(quiche::ConnectionId::from_ref);
         let conn = quiche::accept(&scid_val, odcid_val.as_ref(), local, peer, &mut self.config)?;
 
-        // Modulo 65536 to fit within CooldownArray (1024 * 64 bits)
-        let user_id = self.next_user_id % (crate::cooldown::COOLDOWN_ARRAY_LEN as u32 * 64);
-        self.next_user_id = self.next_user_id.wrapping_add(1);
+        let user_id = self.free_user_ids.pop().unwrap();
 
         #[cfg(feature = "debug-logs")]
-        println!("Accepted new QUIC connection ID: {:?}", scid_val);
-        // TODO: fix this, we insert then fetch, we should just return the conn
-        self.connections.insert(scid.to_vec(), (user_id, conn));
+        println!(
+            "Accepted new QUIC connection ID: {:?} (user_id: {})",
+            scid_val, user_id
+        );
+
+        self.connections.insert(
+            SourceConnectionId(scid.to_vec()),
+            (user_id, conn, DestinationConnectionId(dcid.to_vec())),
+        );
         Ok(())
+    }
+
+    fn resolve_connection_id(
+        &mut self,
+        dcid: &[u8],
+        ty: quiche::Type,
+        local: SocketAddr,
+        peer: SocketAddr,
+    ) -> Option<SourceConnectionId> {
+        let process_id = self
+            .cid_map
+            .get(&DestinationConnectionId(dcid.to_vec()))
+            .map_or_else(|| SourceConnectionId(dcid.to_vec()), |id| id.clone());
+
+        if self.connections.contains_key(&process_id) {
+            return Some(process_id);
+        }
+
+        if ty != quiche::Type::Initial {
+            return None;
+        }
+
+        let mut scid = [0; quiche::MAX_CONN_ID_LEN];
+        rand::thread_rng().fill(&mut scid);
+
+        match self.accept_connection(&scid[..], dcid, None, local, peer) {
+            Ok(_) => {
+                let source_cid = SourceConnectionId(scid.to_vec());
+                self.cid_map
+                    .insert(DestinationConnectionId(dcid.to_vec()), source_cid.clone());
+                Some(source_cid)
+            }
+            Err(_e) => {
+                #[cfg(feature = "debug-logs")]
+                println!("Failed to accept connection: {:?}", _e);
+                None
+            }
+        }
+    }
+
+    fn process_datagrams(conn: &mut Connection) -> Vec<PixelDatagram> {
+        let mut pixels = Vec::new();
+        if !conn.is_established() {
+            return pixels;
+        }
+
+        // TODO: use h3 to poll dgrams
+        // In a real WebTransport setup, we'd use h3 to poll dgrams
+        let mut dgram_buf = [0; 1500];
+        // Securely copies the decrypted, verified WebTransport datagram
+        // out of quiche's internal state machine into our local variable dgram_buf
+        while let Ok(len) = conn.dgram_recv(&mut dgram_buf) {
+            if len == std::mem::size_of::<PixelDatagram>() {
+                pixels.push(PixelDatagram {
+                    x: u16::from_ne_bytes([dgram_buf[0], dgram_buf[1]]),
+                    y: u16::from_ne_bytes([dgram_buf[2], dgram_buf[3]]),
+                    color: dgram_buf[4],
+                });
+            } else {
+                #[cfg(feature = "debug-logs")]
+                println!(
+                    "Received datagram of incorrect size: {} (expected {})",
+                    len,
+                    std::mem::size_of::<PixelDatagram>()
+                );
+            }
+        }
+        pixels
     }
 
     pub fn handle_incoming(
@@ -83,39 +178,11 @@ impl TransportState {
         peer: SocketAddr,
         local: SocketAddr,
     ) -> Option<(u32, Vec<PixelDatagram>)> {
-        let hdr = match quiche::Header::from_slice(buf, quiche::MAX_CONN_ID_LEN) {
-            Ok(v) => v,
-            Err(_) => return None,
-        };
+        let hdr = quiche::Header::from_slice(buf, quiche::MAX_CONN_ID_LEN).ok()?;
 
-        let mut process_id = hdr.dcid.to_vec();
-        if let Some(scid) = self.cid_map.get(&hdr.dcid[..]) {
-            process_id = scid.clone();
-        }
+        let process_id = self.resolve_connection_id(&hdr.dcid[..], hdr.ty, local, peer)?;
 
-        // Track both the destination ID and any mapped tuple so the rust checker stops panicking.
-        if !self.connections.contains_key(&process_id[..]) {
-            if hdr.ty != quiche::Type::Initial {
-                return None;
-            }
-
-            let mut scid = [0; quiche::MAX_CONN_ID_LEN];
-            rand::thread_rng().fill(&mut scid);
-
-            match self.accept_connection(&scid[..], None, local, peer) {
-                Ok(_) => {
-                    process_id = scid.to_vec();
-                    self.cid_map.insert(hdr.dcid.to_vec(), scid.to_vec());
-                }
-                Err(_e) => {
-                    #[cfg(feature = "debug-logs")]
-                    println!("Failed to accept connection: {:?}", _e);
-                    return None;
-                }
-            }
-        }
-
-        let tuple = self.connections.get_mut(&process_id[..])?;
+        let tuple = self.connections.get_mut(&process_id)?;
         let user_id = tuple.0;
         let conn = &mut tuple.1;
 
@@ -125,31 +192,7 @@ impl TransportState {
         };
         let _ = conn.recv(buf, recv_info);
 
-        let mut pixels = Vec::new();
-        if conn.is_established() {
-            // TODO: use h3 to poll dgrams
-            // In a real WebTransport setup, we'd use h3 to poll dgrams
-            let mut dgram_buf = [0; 1500];
-            // Securely copies the decrypted, verified WebTransport datagram
-            // out of quiche's internal state machine into our local variable dgram_buf
-            while let Ok(len) = conn.dgram_recv(&mut dgram_buf) {
-                if len == std::mem::size_of::<PixelDatagram>() {
-                    let pixel = PixelDatagram {
-                        x: u16::from_ne_bytes([dgram_buf[0], dgram_buf[1]]),
-                        y: u16::from_ne_bytes([dgram_buf[2], dgram_buf[3]]),
-                        color: dgram_buf[4],
-                    };
-                    pixels.push(pixel);
-                } else {
-                    #[cfg(feature = "debug-logs")]
-                    println!(
-                        "Received datagram of incorrect size: {} (expected {})",
-                        len,
-                        std::mem::size_of::<PixelDatagram>()
-                    );
-                }
-            }
-        }
+        let pixels = Self::process_datagrams(conn);
 
         if pixels.is_empty() {
             None
@@ -158,5 +201,26 @@ impl TransportState {
             println!("Received {} pixels from {:?}", pixels.len(), peer);
             Some((user_id, pixels))
         }
+    }
+
+    pub fn cleanup_connections(&mut self) {
+        let mut freed_ids = Vec::new();
+        let mut freed_dcids = Vec::new();
+
+        self.connections.retain(|_, (id, conn, dcid)| {
+            if conn.is_closed() {
+                freed_ids.push(*id);
+                freed_dcids.push(dcid.clone());
+                false
+            } else {
+                true
+            }
+        });
+
+        for dcid in freed_dcids {
+            self.cid_map.remove(&dcid);
+        }
+
+        self.free_user_ids.extend(freed_ids);
     }
 }

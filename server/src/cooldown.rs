@@ -5,6 +5,11 @@ pub const COOLDOWN_ARRAY_LEN: usize = 1024;
 pub struct CooldownArray {
     pub bits: [u64; COOLDOWN_ARRAY_LEN],
 }
+impl Default for CooldownArray {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl CooldownArray {
     pub fn new() -> Self {

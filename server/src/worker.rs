@@ -16,7 +16,7 @@ const TAG_OUTGOING_UDP: u64 = 2;
 
 const PKT_BUF_SIZE: usize = 2048; // Max standard UDP (+QUIC) MTU size
 const NUM_BUFFERS: u16 = 65535; // Maximum allowable provided buffers (u16 limit)
-const TX_CAPACITY: usize = 65536; // Increased from 16384
+const TX_CAPACITY: usize = 65535; // Increased from 16384
 const BGID: u16 = 0; // Buffer Group ID
 
 pub struct TxItem {
@@ -223,42 +223,7 @@ impl WorkerCore {
         IoUring::builder()
             .setup_coop_taskrun()
             .setup_single_issuer()
-            .build(32768)
-            .or_else(|_| {
-                println!("Warning: Failed to create io_uring of size 32768, falling back to 16384");
-                IoUring::builder()
-                    .setup_coop_taskrun()
-                    .setup_single_issuer()
-                    .build(16384)
-            })
-            .or_else(|_| {
-                println!("Warning: Failed to create io_uring of size 16384, falling back to 8192");
-                IoUring::builder()
-                    .setup_coop_taskrun()
-                    .setup_single_issuer()
-                    .build(8192)
-            })
-            .or_else(|_| {
-                println!("Warning: Failed to create io_uring of size 8192, falling back to 4096");
-                IoUring::builder()
-                    .setup_coop_taskrun()
-                    .setup_single_issuer()
-                    .build(4096)
-            })
-            .or_else(|_| {
-                println!("Warning: Failed to create io_uring of size 4096, falling back to 2048");
-                IoUring::builder()
-                    .setup_coop_taskrun()
-                    .setup_single_issuer()
-                    .build(2048)
-            })
-            .or_else(|_| {
-                println!("Warning: Failed to create io_uring of size 2048, falling back to 1024");
-                IoUring::builder()
-                    .setup_coop_taskrun()
-                    .setup_single_issuer()
-                    .build(1024)
-            })
+            .build(u16::MAX as _)
             .expect("Failed to create io_uring")
     }
 
@@ -334,7 +299,7 @@ impl WorkerCore {
             compressed_slice.len()
         );
 
-        for (_, conn) in self.transport.connections.values_mut() {
+        for (_, conn, _) in self.transport.connections.values_mut() {
             for chunk in compressed_slice.chunks(1200) {
                 let _ = conn.dgram_send(chunk);
             }
@@ -372,7 +337,7 @@ impl WorkerCore {
             self.diff_buffer.len()
         );
 
-        for (_, conn) in self.transport.connections.values_mut() {
+        for (_, conn, _) in self.transport.connections.values_mut() {
             for chunk in self.diff_buffer.chunks(1200) {
                 let _ = conn.dgram_send(chunk);
             }
@@ -442,7 +407,7 @@ impl WorkerCore {
     #[cfg(target_os = "linux")]
     fn flush_outgoing(&mut self, ring: &mut IoUring, fd_types: types::Fd) -> usize {
         let mut sqes_added = 0;
-        for (_, conn) in self.transport.connections.values_mut() {
+        for (_, conn, _) in self.transport.connections.values_mut() {
             while let Some(idx) = self.tx_free_indices.pop() {
                 let item = &mut self.tx_items[idx];
                 match conn.send(&mut item.buf) {
@@ -499,13 +464,11 @@ impl WorkerCore {
 
         // Throttle to every 20ms to save massive CPU overhead on 40k+ connections
         if now_ms - *last_timeout_ms >= 20 {
-            for (_, conn) in self.transport.connections.values_mut() {
+            for (_, conn, _) in self.transport.connections.values_mut() {
                 conn.on_timeout();
             }
 
-            self.transport
-                .connections
-                .retain(|_, (_, conn)| !conn.is_closed());
+            self.transport.cleanup_connections();
 
             *last_timeout_ms = now_ms;
         }
@@ -523,6 +486,8 @@ impl WorkerCore {
                 let idx = (user_data >> 8) as usize;
                 self.tx_free_indices.push(idx);
             } else if user_data == TAG_INCOMING_UDP {
+                // result is the OP specific code
+                // for RecvMsgMulti it is equivalent to the return value of the read(2)
                 if result >= 0 {
                     self.handle_incoming_cqe(ring, flags, fd_types);
                 } else {
@@ -558,6 +523,7 @@ impl WorkerCore {
         self.provide_initial_buffers(&mut ring);
 
         let fd_types = types::Fd(fd);
+        // Initial socket receive sqe
         let recv = opcode::RecvMsgMulti::new(fd_types, self.msghdr.as_ref() as *const _, BGID)
             .build()
             .user_data(TAG_INCOMING_UDP);
@@ -581,7 +547,6 @@ impl WorkerCore {
             crate::canvas::ACTIVE_INDEX.load(std::sync::atomic::Ordering::Acquire);
 
         loop {
-            // One syscall to sleep until data arrives
             ring.submit_and_wait(1).unwrap();
 
             self.handle_tick(&mut last_tick_sec);
