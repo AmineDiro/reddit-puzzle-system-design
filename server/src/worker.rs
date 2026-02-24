@@ -229,7 +229,7 @@ impl WorkerCore {
         IoUring::builder()
             .setup_coop_taskrun()
             .setup_single_issuer()
-            .build(u16::MAX as _)
+            .build(32768)
             .expect("Failed to create io_uring")
     }
 
