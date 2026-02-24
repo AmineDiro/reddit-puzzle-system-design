@@ -125,8 +125,8 @@ impl MasterCore {
             // Sequence lock write end (make even)
             CANVAS_SEQ.store(seq.wrapping_add(1), Ordering::Release);
 
-            let now_tsc = unsafe { std::arch::x86_64::_rdtsc() };
-            if now_tsc.wrapping_sub(last_broadcast_tsc) >= broadcast_threshold_cycles {
+            let now = std::time::Instant::now();
+            if now.duration_since(last_broadcast_time) >= broadcast_threshold {
                 let current_active = crate::canvas::ACTIVE_INDEX.load(Ordering::Relaxed);
                 let next_active = (current_active + 1) & 15;
 
@@ -142,7 +142,7 @@ impl MasterCore {
 
                 crate::canvas::ACTIVE_INDEX.store(next_active, Ordering::Release);
 
-                last_broadcast_tsc = now_tsc;
+                last_broadcast_time = now;
             }
 
             std::hint::spin_loop();

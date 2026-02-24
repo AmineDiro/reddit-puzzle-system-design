@@ -3,6 +3,7 @@ use crate::master::PixelWrite;
 use crate::spsc::SpscRingBuffer;
 use crate::timing_wheel::TimingWheel;
 use crate::transport::{PixelDatagram, TransportState};
+#[cfg(target_os = "linux")]
 use io_uring::{IoUring, cqueue, opcode, types};
 use socket2::{Domain, Protocol, Socket, Type};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
@@ -461,14 +462,24 @@ impl WorkerCore {
     }
 
     #[cfg(target_os = "linux")]
-    fn maintain_connections(&mut self) {
-        for (_, conn) in self.transport.connections.values_mut() {
-            conn.on_timeout();
-        }
+    fn maintain_connections(&mut self, last_timeout_ms: &mut u128) {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
 
-        self.transport
-            .connections
-            .retain(|_, (_, conn)| !conn.is_closed());
+        // Throttle to every 20ms to save massive CPU overhead on 40k+ connections
+        if now_ms - *last_timeout_ms >= 20 {
+            for (_, conn) in self.transport.connections.values_mut() {
+                conn.on_timeout();
+            }
+
+            self.transport
+                .connections
+                .retain(|_, (_, conn)| !conn.is_closed());
+
+            *last_timeout_ms = now_ms;
+        }
     }
 
     #[cfg(target_os = "linux")]
@@ -495,6 +506,11 @@ impl WorkerCore {
             .unwrap()
             .as_secs();
 
+        let mut last_timeout_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+
         self.last_broadcast_index =
             crate::canvas::ACTIVE_INDEX.load(std::sync::atomic::Ordering::Relaxed);
 
@@ -506,13 +522,13 @@ impl WorkerCore {
             self.handle_broadcast();
 
             let mut cqes_processed = 0;
-            let mut pending_cqes = Box::new([(0u64, 0i32, 0u32); 16384]);
+            let mut pending_cqes = Box::new([(0u64, 0i32, 0u32); 65536]);
             let mut parsed_count = 0;
 
             let mut completion = ring.completion();
             while let Some(cqe) = completion.next() {
                 cqes_processed += 1;
-                if parsed_count < 16384 {
+                if parsed_count < 65536 {
                     pending_cqes[parsed_count] = (cqe.user_data(), cqe.result(), cqe.flags());
                     parsed_count += 1;
                 }
@@ -553,7 +569,7 @@ impl WorkerCore {
                 ring.submission().sync(); // Wake up kernel if SQEs pending
             }
 
-            self.maintain_connections();
+            self.maintain_connections(&mut last_timeout_ms);
         }
     }
 }
