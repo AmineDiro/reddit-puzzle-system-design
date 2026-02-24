@@ -83,7 +83,7 @@ impl TransportState {
         peer: SocketAddr,
         local: SocketAddr,
     ) -> Option<(u32, Vec<PixelDatagram>)> {
-        let mut hdr = match quiche::Header::from_slice(buf, quiche::MAX_CONN_ID_LEN) {
+        let hdr = match quiche::Header::from_slice(buf, quiche::MAX_CONN_ID_LEN) {
             Ok(v) => v,
             Err(_) => return None,
         };
@@ -107,9 +107,9 @@ impl TransportState {
                     process_id = scid.to_vec();
                     self.cid_map.insert(hdr.dcid.to_vec(), scid.to_vec());
                 }
-                Err(e) => {
+                Err(_e) => {
                     #[cfg(feature = "debug-logs")]
-                    println!("Failed to accept connection: {:?}", e);
+                    println!("Failed to accept connection: {:?}", _e);
                     return None;
                 }
             }

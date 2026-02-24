@@ -162,7 +162,7 @@ impl WorkerCore {
         }
     }
 
-    pub fn run(self, core_id: usize) {
+    pub fn run(mut self, core_id: usize) {
         if core_affinity::set_for_current(core_affinity::CoreId { id: core_id }) {
             // pinned
         }

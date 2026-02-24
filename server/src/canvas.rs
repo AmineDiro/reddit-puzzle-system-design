@@ -80,7 +80,7 @@ mod tests {
 
     #[test]
     fn test_canvas_snapshot() {
-        let mut canvas = Canvas::new();
+        let canvas = Canvas::new();
         canvas.set_pixel(10, 10, 255);
 
         canvas.snapshot_to_pool(1);
