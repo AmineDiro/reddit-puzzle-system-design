@@ -298,6 +298,7 @@ impl WorkerCore {
 
         for (_, conn, _) in self.transport.connections.values_mut() {
             for chunk in compressed_slice.chunks(BROADCAST_CHUNK_SIZE) {
+                // TODO: how does client which chunk number is which?
                 let _ = conn.dgram_send(chunk);
             }
         }
