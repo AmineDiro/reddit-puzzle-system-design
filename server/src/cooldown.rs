@@ -1,5 +1,5 @@
 // 52,631 bits / 8 = ~6.5 KB. We'll use 823 u64s which gives 52672 bits.
-pub const COOLDOWN_ARRAY_LEN: usize = 2048;
+pub const COOLDOWN_ARRAY_LEN: usize = 1024;
 
 #[derive(Clone)]
 pub struct CooldownArray {
