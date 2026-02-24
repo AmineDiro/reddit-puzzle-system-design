@@ -298,64 +298,83 @@ impl WorkerCore {
 
     #[cfg(target_os = "linux")]
     fn handle_broadcast(&mut self) {
-        let current_active = crate::canvas::ACTIVE_INDEX.load(std::sync::atomic::Ordering::Relaxed);
-        if current_active != self.last_broadcast_index {
-            self.last_broadcast_index = current_active;
-            self.broadcast_ticks += 1;
+        // We need Acquire ordering to ensure memory visibility of the canvas buffers updated by the master thread (which uses Release).
+        let current_active = crate::canvas::ACTIVE_INDEX.load(std::sync::atomic::Ordering::Acquire);
+        if current_active == self.last_broadcast_index {
+            return;
+        }
 
-            if self.broadcast_ticks == 1 || self.broadcast_ticks % 60 == 0 {
-                // Send full RLE rarely
-                unsafe {
-                    let compressed_len = crate::canvas::COMPRESSED_LENS[current_active];
-                    let buffer_slice = &crate::canvas::COMPRESSED_BUFFER_POOL[current_active].data
-                        [..compressed_len];
+        self.last_broadcast_index = current_active;
+        self.broadcast_ticks += 1;
 
-                    for (_, conn) in self.transport.connections.values_mut() {
-                        #[cfg(feature = "debug-logs")]
-                        println!(
-                            "Worker: broadcasting {} bytes of FULL RLE data to client",
-                            compressed_len
-                        );
+        if self.should_broadcast_full() {
+            self.broadcast_full_canvas(current_active);
+        } else {
+            self.broadcast_canvas_diff(current_active);
+        }
+    }
 
-                        // Send compressed data in MTU-sized chunks. 1200 is safe for most networks.
-                        for chunk in buffer_slice.chunks(1200) {
-                            let _ = conn.dgram_send(chunk);
-                        }
-                    }
+    #[cfg(target_os = "linux")]
+    fn should_broadcast_full(&self) -> bool {
+        self.broadcast_ticks == 1 || self.broadcast_ticks % 60 == 0
+    }
 
-                    // Sync last_sent_canvas
-                    let new_canvas = &crate::canvas::BUFFER_POOL[current_active].data;
-                    self.last_sent_canvas.copy_from_slice(new_canvas);
-                }
-            } else {
-                // Send very compressed diff
-                self.diff_buffer.clear();
-                let new_canvas = unsafe { &crate::canvas::BUFFER_POOL[current_active].data };
+    #[cfg(target_os = "linux")]
+    fn broadcast_full_canvas(&mut self, active_index: usize) {
+        let (compressed_slice, new_canvas) = unsafe {
+            let len = crate::canvas::COMPRESSED_LENS[active_index];
+            let buf = &crate::canvas::COMPRESSED_BUFFER_POOL[active_index].data[..len];
+            let canvas = &crate::canvas::BUFFER_POOL[active_index].data;
+            (buf, canvas)
+        };
 
-                for i in 0..crate::canvas::CANVAS_SIZE {
-                    let new_pixel = new_canvas[i];
-                    if self.last_sent_canvas[i] != new_pixel {
-                        // Changed cell: [u32 index, u8 color]
-                        self.diff_buffer
-                            .extend_from_slice(&(i as u32).to_le_bytes());
-                        self.diff_buffer.push(new_pixel);
+        #[cfg(feature = "debug-logs")]
+        println!(
+            "Worker: broadcasting {} bytes of FULL RLE data to client",
+            compressed_slice.len()
+        );
 
-                        self.last_sent_canvas[i] = new_pixel;
-                    }
-                }
+        for (_, conn) in self.transport.connections.values_mut() {
+            for chunk in compressed_slice.chunks(1200) {
+                let _ = conn.dgram_send(chunk);
+            }
+        }
 
-                if !self.diff_buffer.is_empty() {
-                    #[cfg(feature = "debug-logs")]
-                    println!(
-                        "Worker: broadcasting {} bytes of DIFF data to client",
-                        self.diff_buffer.len()
-                    );
-                    for (_, conn) in self.transport.connections.values_mut() {
-                        for chunk in self.diff_buffer.chunks(1200) {
-                            let _ = conn.dgram_send(chunk);
-                        }
-                    }
-                }
+        self.last_sent_canvas.copy_from_slice(new_canvas);
+    }
+
+    #[cfg(target_os = "linux")]
+    fn broadcast_canvas_diff(&mut self, active_index: usize) {
+        self.diff_buffer.clear();
+        let new_canvas = unsafe { &crate::canvas::BUFFER_POOL[active_index].data };
+
+        for (i, (&new_pixel, old_pixel)) in new_canvas
+            .iter()
+            .zip(self.last_sent_canvas.iter_mut())
+            .enumerate()
+        {
+            if *old_pixel != new_pixel {
+                // Changed cell: [u32 index, u8 color]
+                self.diff_buffer
+                    .extend_from_slice(&(i as u32).to_le_bytes());
+                self.diff_buffer.push(new_pixel);
+                *old_pixel = new_pixel;
+            }
+        }
+
+        if self.diff_buffer.is_empty() {
+            return;
+        }
+
+        #[cfg(feature = "debug-logs")]
+        println!(
+            "Worker: broadcasting {} bytes of DIFF data to client",
+            self.diff_buffer.len()
+        );
+
+        for (_, conn) in self.transport.connections.values_mut() {
+            for chunk in self.diff_buffer.chunks(1200) {
+                let _ = conn.dgram_send(chunk);
             }
         }
     }
@@ -493,7 +512,44 @@ impl WorkerCore {
     }
 
     #[cfg(target_os = "linux")]
+    fn process_pending_cqes(
+        &mut self,
+        ring: &mut IoUring,
+        fd_types: types::Fd,
+        pending_cqes: &[(u64, i32, u32)],
+    ) {
+        for &(user_data, result, flags) in pending_cqes {
+            if user_data & 0xFF == TAG_OUTGOING_UDP {
+                let idx = (user_data >> 8) as usize;
+                self.tx_free_indices.push(idx);
+            } else if user_data == TAG_INCOMING_UDP {
+                if result >= 0 {
+                    self.handle_incoming_cqe(ring, flags, fd_types);
+                } else {
+                    #[cfg(feature = "debug-logs")]
+                    println!("CQE error in RecvMsgMulti: {}", result);
 
+                    if !io_uring::cqueue::more(flags) {
+                        let recv = opcode::RecvMsgMulti::new(
+                            fd_types,
+                            self.msghdr.as_ref() as *const _,
+                            BGID,
+                        )
+                        .build()
+                        .user_data(TAG_INCOMING_UDP);
+                        unsafe {
+                            if ring.submission().push(&recv).is_err() {
+                                ring.submit().unwrap();
+                                ring.submission().push(&recv).unwrap();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
     fn run_linux(&mut self) {
         let mut ring = self.setup_io_uring();
         let socket = self.setup_socket();
@@ -522,7 +578,7 @@ impl WorkerCore {
             .as_millis();
 
         self.last_broadcast_index =
-            crate::canvas::ACTIVE_INDEX.load(std::sync::atomic::Ordering::Relaxed);
+            crate::canvas::ACTIVE_INDEX.load(std::sync::atomic::Ordering::Acquire);
 
         loop {
             // One syscall to sleep until data arrives
@@ -532,49 +588,20 @@ impl WorkerCore {
             self.handle_broadcast();
 
             let mut cqes_processed = 0;
-            let mut pending_cqes = Box::new([(0u64, 0i32, 0u32); 65536]);
+            let mut pending_cqes = Box::new([(0u64, 0i32, 0u32); u16::MAX as usize]);
             let mut parsed_count = 0;
 
             let mut completion = ring.completion();
             while let Some(cqe) = completion.next() {
                 cqes_processed += 1;
-                if parsed_count < 65536 {
+                if parsed_count < u16::MAX as usize {
                     pending_cqes[parsed_count] = (cqe.user_data(), cqe.result(), cqe.flags());
                     parsed_count += 1;
                 }
             }
             drop(completion);
 
-            for i in 0..parsed_count {
-                let (user_data, result, flags) = pending_cqes[i];
-                if user_data & 0xFF == TAG_OUTGOING_UDP {
-                    let idx = (user_data >> 8) as usize;
-                    self.tx_free_indices.push(idx);
-                } else if user_data == TAG_INCOMING_UDP {
-                    if result >= 0 {
-                        self.handle_incoming_cqe(&mut ring, flags, fd_types);
-                    } else {
-                        #[cfg(feature = "debug-logs")]
-                        println!("CQE error in RecvMsgMulti: {}", result);
-
-                        if !io_uring::cqueue::more(flags) {
-                            let recv = opcode::RecvMsgMulti::new(
-                                fd_types,
-                                self.msghdr.as_ref() as *const _,
-                                BGID,
-                            )
-                            .build()
-                            .user_data(TAG_INCOMING_UDP);
-                            unsafe {
-                                if ring.submission().push(&recv).is_err() {
-                                    ring.submit().unwrap();
-                                    ring.submission().push(&recv).unwrap();
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            self.process_pending_cqes(&mut ring, fd_types, &pending_cqes[..parsed_count]);
 
             let sqes_added = self.flush_outgoing(&mut ring, fd_types);
 
