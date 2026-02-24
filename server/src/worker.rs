@@ -41,6 +41,7 @@ pub struct WorkerCore {
     last_sent_canvas: Box<[u8; crate::canvas::CANVAS_SIZE]>,
     broadcast_ticks: u32,
     diff_buffer: Vec<u8>,
+    clock: Arc<crate::time::AtomicTime>,
 }
 
 unsafe impl Send for WorkerCore {}
@@ -123,7 +124,11 @@ impl Framing {
 }
 
 impl WorkerCore {
-    pub fn new(master_queue: Arc<SpscRingBuffer<PixelWrite>>, port: u16) -> Self {
+    pub fn new(
+        master_queue: Arc<SpscRingBuffer<PixelWrite>>,
+        port: u16,
+        clock: Arc<crate::time::AtomicTime>,
+    ) -> Self {
         let mut tx_items = Vec::with_capacity(TX_CAPACITY);
         let mut tx_free_indices = Vec::with_capacity(TX_CAPACITY);
         for i in 0..TX_CAPACITY {
@@ -159,6 +164,7 @@ impl WorkerCore {
                 .unwrap(),
             broadcast_ticks: 0,
             diff_buffer: Vec::with_capacity(1024),
+            clock,
         }
     }
 
@@ -248,11 +254,7 @@ impl WorkerCore {
 
     #[cfg(target_os = "linux")]
     fn handle_tick(&mut self, last_tick_sec: &mut u64) {
-        // TODO: use something faster to get time, this could be slow
-        let now_sec = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let now_sec = self.clock.now_sec();
 
         if now_sec > *last_tick_sec {
             // Execute O(1) tick mass eviction
@@ -457,10 +459,7 @@ impl WorkerCore {
 
     #[cfg(target_os = "linux")]
     fn maintain_connections(&mut self, last_timeout_ms: &mut u128) {
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis();
+        let now_ms = self.clock.now_ms() as u128;
 
         // Throttle to every 20ms to save massive CPU overhead on 40k+ connections
         if now_ms - *last_timeout_ms >= 20 {
@@ -533,15 +532,8 @@ impl WorkerCore {
         }
         ring.submit().unwrap();
 
-        let mut last_tick_sec = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
-        let mut last_timeout_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis();
+        let mut last_tick_sec = self.clock.now_sec();
+        let mut last_timeout_ms = self.clock.now_ms() as u128;
 
         self.last_broadcast_index =
             crate::canvas::ACTIVE_INDEX.load(std::sync::atomic::Ordering::Acquire);
