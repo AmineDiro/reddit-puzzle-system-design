@@ -14,7 +14,7 @@ use tokio::time::sleep;
 mod metrics;
 mod tls;
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 struct Args {
     #[arg(long)]
     target: String,
@@ -22,6 +22,12 @@ struct Args {
     clients: usize,
     #[arg(long)]
     id: String,
+    #[arg(long, default_value_t = 10000)]
+    max_conn_jitter: u64,
+    #[arg(long, default_value_t = 1000)]
+    min_pixel_wait: u64,
+    #[arg(long, default_value_t = 10000)]
+    max_pixel_wait: u64,
 }
 
 pub fn rle_decompress(src: &[u8], dst: &mut [u8]) -> usize {
@@ -41,8 +47,8 @@ pub fn rle_decompress(src: &[u8], dst: &mut [u8]) -> usize {
     dst_idx
 }
 
-async fn simulate_user(endpoint: Endpoint, target: String, metrics: Arc<metrics::LoadMetrics>) {
-    let target_cleaned = target.replace("https://", "").replace("http://", "");
+async fn simulate_user(endpoint: Endpoint, metrics: Arc<metrics::LoadMetrics>, args: Args) {
+    let target_cleaned = args.target.replace("https://", "").replace("http://", "");
     let addr = target_cleaned
         .parse::<std::net::SocketAddr>()
         .expect("Invalid target format");
@@ -73,9 +79,15 @@ async fn simulate_user(endpoint: Endpoint, target: String, metrics: Arc<metrics:
         }
     };
 
-    let mut canvas = vec![0u8; 1_000_000];
+    let mut _canvas = vec![0u8; 1_000_000];
 
     loop {
+        let pixel_wait = if args.min_pixel_wait >= args.max_pixel_wait {
+            args.min_pixel_wait
+        } else {
+            rand::thread_rng().gen_range(args.min_pixel_wait..args.max_pixel_wait)
+        };
+
         tokio::select! {
             result = conn.read_datagram() => {
                 match result {
@@ -96,7 +108,7 @@ async fn simulate_user(endpoint: Endpoint, target: String, metrics: Arc<metrics:
                     }
                 }
             }
-            _ = sleep(Duration::from_secs(rand::thread_rng().gen_range(1..10))) => {
+            _ = sleep(Duration::from_millis(pixel_wait)) => {
                 let mut payload = [0u8; 5];
                 payload[0..2].copy_from_slice(&100u16.to_ne_bytes());
                 payload[2..4].copy_from_slice(&200u16.to_ne_bytes());
@@ -133,13 +145,17 @@ async fn main() {
 
     for _ in 0..args.clients {
         let ep = endpoint.clone();
-        let target = args.target.clone();
         let m = metrics.clone();
+        let a = args.clone();
 
         tokio::spawn(async move {
-            let jitter = rand::thread_rng().gen_range(0..10_000);
+            let jitter = if a.max_conn_jitter == 0 {
+                0
+            } else {
+                rand::thread_rng().gen_range(0..a.max_conn_jitter)
+            };
             sleep(Duration::from_millis(jitter)).await;
-            simulate_user(ep, target, m).await;
+            simulate_user(ep, m, a).await;
         });
     }
 
