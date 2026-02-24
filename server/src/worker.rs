@@ -401,7 +401,10 @@ impl WorkerCore {
         .user_data(0);
 
         unsafe {
-            ring.submission().push(&replenish_sqe).unwrap();
+            if ring.submission().push(&replenish_sqe).is_err() {
+                ring.submit().unwrap();
+                ring.submission().push(&replenish_sqe).unwrap();
+            }
         }
 
         if !io_uring::cqueue::more(flags) {
@@ -409,7 +412,10 @@ impl WorkerCore {
                 .build()
                 .user_data(TAG_INCOMING_UDP);
             unsafe {
-                ring.submission().push(&recv).unwrap();
+                if ring.submission().push(&recv).is_err() {
+                    ring.submit().unwrap();
+                    ring.submission().push(&recv).unwrap();
+                }
             }
         }
     }
@@ -447,7 +453,11 @@ impl WorkerCore {
                             .user_data(TAG_OUTGOING_UDP | ((idx as u64) << 8));
 
                         unsafe {
-                            ring.submission().push(&send_sqe).expect("SQ full");
+                            if ring.submission().push(&send_sqe).is_err() {
+                                // flush the pending items to the Linux kernel, making room for the new job, and then retry pushing it.
+                                ring.submit().unwrap();
+                                ring.submission().push(&send_sqe).unwrap();
+                            }
                         }
                         sqes_added += 1;
                     }
@@ -556,7 +566,10 @@ impl WorkerCore {
                             .build()
                             .user_data(TAG_INCOMING_UDP);
                             unsafe {
-                                ring.submission().push(&recv).unwrap();
+                                if ring.submission().push(&recv).is_err() {
+                                    ring.submit().unwrap();
+                                    ring.submission().push(&recv).unwrap();
+                                }
                             }
                         }
                     }
