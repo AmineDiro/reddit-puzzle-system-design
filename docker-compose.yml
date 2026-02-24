@@ -33,7 +33,7 @@ services:
     # Bind to CCX 0 (Threads 0,1,2 and siblings 6,7,8)
     cpuset: "0,1,2,6,7,8"
     # 1 Master thread + 3 Worker threads
-    command: ["server", "--workers", "3"]
+    command: ["server", "--workers", "5"]
     ports:
       - "4433:4433/udp"
 
