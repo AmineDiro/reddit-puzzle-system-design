@@ -88,7 +88,7 @@ fn main() {
     let mut handles = Vec::new();
 
     // 1. Spawn Workers
-    for (mut worker, core_id) in workers {
+    for (worker, core_id) in workers {
         handles.push(std::thread::spawn(move || {
             worker.run(core_id);
         }));

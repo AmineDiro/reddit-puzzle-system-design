@@ -2,9 +2,9 @@ use crate::cooldown::CooldownArray;
 use crate::master::PixelWrite;
 use crate::spsc::SpscRingBuffer;
 use crate::timing_wheel::TimingWheel;
-use crate::transport::{PixelDatagram, TransportState};
+use crate::transport::TransportState;
 #[cfg(target_os = "linux")]
-use io_uring::{IoUring, cqueue, opcode, types};
+use io_uring::{IoUring, opcode, types};
 use socket2::{Domain, Protocol, Socket, Type};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::os::unix::io::AsRawFd;
@@ -162,7 +162,7 @@ impl WorkerCore {
         }
     }
 
-    pub fn run(mut self, core_id: usize) {
+    pub fn run(self, core_id: usize) {
         if core_affinity::set_for_current(core_affinity::CoreId { id: core_id }) {
             // pinned
         }
@@ -451,7 +451,7 @@ impl WorkerCore {
                         }
                         sqes_added += 1;
                     }
-                    Err(_) => {
+                    Err(_e) => {
                         self.tx_free_indices.push(idx);
                         break;
                     }

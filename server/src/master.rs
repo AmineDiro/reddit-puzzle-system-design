@@ -99,10 +99,10 @@ impl MasterCore {
         // Use TSC (Time Stamp Counter) for ultra-fast cycle-accurate timing
         // TSC freq varies, but we calibrate it crudely or just use a cycle threshold.
         // On modern CPUs 100ms is ~200M-400M cycles.
-        let mut last_broadcast_tsc = unsafe { std::arch::x86_64::_rdtsc() };
-        // Approximate 100ms threshold in cycles (assuming ~3GHz base)
-        // Adjust this if you want exact 100ms, but this is the "fast path"
-        let broadcast_threshold_cycles = 300_000_000u64;
+        // Use Instant for portable high-resolution timing
+        // It's fast enough and doesn't rely on x86-specific TSC commands.
+        let mut last_broadcast_time = std::time::Instant::now();
+        let broadcast_threshold = std::time::Duration::from_millis(100);
 
         loop {
             let seq = CANVAS_SEQ.load(Ordering::Relaxed);
