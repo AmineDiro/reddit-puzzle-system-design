@@ -91,11 +91,10 @@ pub const FULL_BROADCAST_INTERVAL: u32 = 60;
 // Cooldown Bitset  (derived from MAX_CONNECTIONS_PER_WORKER)
 // ---------------------------------------------------------------------------
 
-/// Bits per chunk in the cooldown bitset (= 64 for u64).
-const BITS_PER_COOLDOWN_CHUNK: usize = std::mem::size_of::<u64>() * 8;
-
 /// Number of u64 chunks in the cooldown bitset.
 /// Each u64 tracks BITS_PER_COOLDOWN_CHUNK connections.
+/// Bits per chunk in the cooldown bitset (= 64 for u64).
+const BITS_PER_COOLDOWN_CHUNK: usize = std::mem::size_of::<u64>() * 8;
 pub const COOLDOWN_ARRAY_LEN: usize = MAX_CONNECTIONS_PER_WORKER / BITS_PER_COOLDOWN_CHUNK;
 
 // ---------------------------------------------------------------------------
@@ -287,3 +286,54 @@ pub const MEM_PER_WORKER: usize =
 /// Total buffer pool memory (static, shared across all workers).
 ///   CANVAS_BUFFER_POOL_SIZE × CANVAS_SIZE × 3 (raw + compressed + lens).
 pub const MEM_CANVAS_POOL: usize = CANVAS_BUFFER_POOL_SIZE * CANVAS_SIZE * 3;
+
+/// Pretty-print the pre-calculated memory budget to stdout.
+pub fn print_mem_footprint(num_workers: usize) {
+    let to_mb = |bytes: usize| bytes as f64 / 1024.0 / 1024.0;
+
+    println!("+----------------------------------------------------------------------------+");
+    println!("|  MEMORY FOOTPRINT REPORT                                                  |");
+    println!("+----------------------------------------------------------------------------+");
+    println!("  Per-Worker Heap Usage:");
+    println!(
+        "    - io_uring Slab:      {:>8.2} MB ({} buffers)",
+        to_mb(MEM_BUFFER_SLAB),
+        IO_URING_NUM_BUFFERS
+    );
+    println!(
+        "    - TX Send Slots:      {:>8.2} MB ({} items)",
+        to_mb(MEM_TX_ITEMS),
+        TX_CAPACITY
+    );
+    println!("    - Cooldown Bitset:    {:>8.2} MB", to_mb(MEM_COOLDOWN));
+    println!(
+        "    - Timing Wheel:       {:>8.2} MB ({} ticks)",
+        to_mb(MEM_TIMING_WHEEL),
+        TIMING_WHEEL_TICKS
+    );
+    println!(
+        "    - Canvas Snapshot:    {:>8.2} MB",
+        to_mb(MEM_CANVAS_COPY)
+    );
+    println!("    ----------------------------------");
+    println!(
+        "    TOTAL PER WORKER:     {:>8.2} MB",
+        to_mb(MEM_PER_WORKER)
+    );
+    println!();
+    println!("  Global Shared Memory:");
+    println!(
+        "    - Canvas RCU Pool:    {:>8.2} MB ({} slots)",
+        to_mb(MEM_CANVAS_POOL),
+        CANVAS_BUFFER_POOL_SIZE
+    );
+    println!("    ----------------------------------");
+
+    let total_est = (MEM_PER_WORKER * num_workers) + MEM_CANVAS_POOL;
+    println!(
+        "  ESTIMATED TOTAL RSS:    {:>8.2} MB (for {} workers)",
+        to_mb(total_est),
+        num_workers
+    );
+    println!("+----------------------------------------------------------------------------+");
+}

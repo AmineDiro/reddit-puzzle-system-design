@@ -9,7 +9,7 @@ pub mod transport;
 pub mod worker;
 
 use crate::canvas::Canvas;
-use crate::const_settings::SERVER_PORT;
+use crate::const_settings::{SERVER_PORT, print_mem_footprint};
 use crate::master::{MasterCore, PixelWrite};
 use crate::spsc::SpscRingBuffer;
 use crate::time::AtomicTime;
@@ -73,6 +73,8 @@ fn main() {
         worker_cores.len(),
         worker_cores
     );
+
+    print_mem_footprint(num_workers);
 
     let canvas = Arc::new(Canvas::new());
     let mut worker_queues = Vec::with_capacity(worker_cores.len());
