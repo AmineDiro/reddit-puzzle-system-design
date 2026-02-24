@@ -85,7 +85,7 @@ fn main() {
         workers.push((WorkerCore::new(queue, port, clock.clone()), core_id));
     }
 
-    let master = MasterCore::new(worker_queues, canvas.clone());
+    let master = MasterCore::new(worker_queues, canvas.clone(), clock.clone());
     // (BroadcastCore removed)
 
     // Spawn Threads

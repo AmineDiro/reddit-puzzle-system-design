@@ -1,5 +1,6 @@
 use crate::canvas::Canvas;
 use crate::spsc::SpscRingBuffer;
+use crate::time::AtomicTime;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -83,11 +84,20 @@ pub fn rle_compress(src: &[u8], dst: &mut [u8]) -> usize {
 pub struct MasterCore {
     workers: Vec<Arc<SpscRingBuffer<PixelWrite>>>,
     pub canvas: Arc<Canvas>,
+    clock: Arc<AtomicTime>,
 }
 
 impl MasterCore {
-    pub fn new(workers: Vec<Arc<SpscRingBuffer<PixelWrite>>>, canvas: Arc<Canvas>) -> Self {
-        Self { workers, canvas }
+    pub fn new(
+        workers: Vec<Arc<SpscRingBuffer<PixelWrite>>>,
+        canvas: Arc<Canvas>,
+        clock: Arc<AtomicTime>,
+    ) -> Self {
+        Self {
+            workers,
+            canvas,
+            clock,
+        }
     }
 
     pub fn run(&self, core_id: usize) {
@@ -95,14 +105,9 @@ impl MasterCore {
         if core_affinity::set_for_current(core_affinity::CoreId { id: core_id }) {
             // Successfully pinned
         }
-
-        // Use TSC (Time Stamp Counter) for ultra-fast cycle-accurate timing
-        // TSC freq varies, but we calibrate it crudely or just use a cycle threshold.
-        // On modern CPUs 100ms is ~200M-400M cycles.
-        // Use Instant for portable high-resolution timing
-        // It's fast enough and doesn't rely on x86-specific TSC commands.
-        let mut last_broadcast_time = std::time::Instant::now();
-        let broadcast_threshold = std::time::Duration::from_millis(100);
+        // Use AtomicTime for high-performance timing without syscall overhead
+        let mut last_broadcast_time = self.clock.now_ms();
+        let broadcast_threshold_ms = 100;
 
         loop {
             let seq = CANVAS_SEQ.load(Ordering::Relaxed);
@@ -125,8 +130,8 @@ impl MasterCore {
             // Sequence lock write end (make even)
             CANVAS_SEQ.store(seq.wrapping_add(1), Ordering::Release);
 
-            let now = std::time::Instant::now();
-            if now.duration_since(last_broadcast_time) >= broadcast_threshold {
+            let now = self.clock.now_ms();
+            if now.wrapping_sub(last_broadcast_time) >= broadcast_threshold_ms {
                 let current_active = crate::canvas::ACTIVE_INDEX.load(Ordering::Relaxed);
                 let next_active = (current_active + 1) & 15;
 
