@@ -1,3 +1,9 @@
+use crate::const_settings::{
+    BROADCAST_CHUNK_SIZE, CONN_TIMEOUT_THROTTLE_MS, DGRAM_MAX_SEND_SIZE,
+    DIFF_BUFFER_INITIAL_CAPACITY, FULL_BROADCAST_INTERVAL, IO_URING_BGID, IO_URING_NUM_BUFFERS,
+    IO_URING_SQ_DEPTH, MSG_CONTROL_LEN, PKT_BUF_SIZE, SOCKET_RECV_BUF_SIZE, SOCKET_SEND_BUF_SIZE,
+    TAG_INCOMING_UDP, TAG_OUTGOING_UDP, TX_CAPACITY,
+};
 use crate::cooldown::CooldownArray;
 use crate::master::PixelWrite;
 use crate::spsc::SpscRingBuffer;
@@ -10,17 +16,8 @@ use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::os::unix::io::AsRawFd;
 use std::sync::Arc;
 
-// Tag for completion events
-const TAG_INCOMING_UDP: u64 = 1;
-const TAG_OUTGOING_UDP: u64 = 2;
-
-const PKT_BUF_SIZE: usize = 2048; // Max standard UDP (+QUIC) MTU size
-const NUM_BUFFERS: u16 = 65535; // Maximum allowable provided buffers (u16 limit)
-const TX_CAPACITY: usize = 65535; // Increased from 16384
-const BGID: u16 = 0; // Buffer Group ID
-
 pub struct TxItem {
-    pub buf: [u8; 1500],
+    pub buf: [u8; DGRAM_MAX_SEND_SIZE],
     pub addr: libc::sockaddr_in,
     pub iov: libc::iovec,
     pub msghdr: libc::msghdr,
@@ -38,7 +35,7 @@ pub struct WorkerCore {
     tx_items: Box<[TxItem]>,
     tx_free_indices: Vec<usize>,
     msghdr: Box<libc::msghdr>,
-    last_sent_canvas: Box<[u8; crate::canvas::CANVAS_SIZE]>,
+    last_sent_canvas: Box<[u8; crate::const_settings::CANVAS_SIZE]>,
     broadcast_ticks: u32,
     diff_buffer: Vec<u8>,
     clock: Arc<crate::time::AtomicTime>,
@@ -75,7 +72,7 @@ impl Framing {
 
         // Constants matching WorkerCore msghdr configuration
         let msg_namelen_cap = std::mem::size_of::<libc::sockaddr_in>(); // 16
-        let msg_controllen_cap = 64;
+        let msg_controllen_cap = MSG_CONTROL_LEN;
 
         let name_pos = 16;
         let control_pos = name_pos + msg_namelen_cap;
@@ -133,7 +130,7 @@ impl WorkerCore {
         let mut tx_free_indices = Vec::with_capacity(TX_CAPACITY);
         for i in 0..TX_CAPACITY {
             tx_items.push(TxItem {
-                buf: [0; 1500],
+                buf: [0; DGRAM_MAX_SEND_SIZE],
                 addr: unsafe { std::mem::zeroed() },
                 iov: unsafe { std::mem::zeroed() },
                 msghdr: unsafe { std::mem::zeroed() },
@@ -146,7 +143,7 @@ impl WorkerCore {
             cooldown_master: CooldownArray::new(),
             timing_wheel: Box::new(TimingWheel::new()),
             port,
-            buffer_slab: vec![0; PKT_BUF_SIZE * (NUM_BUFFERS as usize)],
+            buffer_slab: vec![0; PKT_BUF_SIZE * (IO_URING_NUM_BUFFERS as usize)],
             transport: TransportState::new(),
             framing: Framing::new(port),
             last_broadcast_index: 0,
@@ -155,15 +152,15 @@ impl WorkerCore {
             msghdr: Box::new(unsafe {
                 let mut msghdr: libc::msghdr = std::mem::zeroed();
                 msghdr.msg_namelen = std::mem::size_of::<libc::sockaddr_in>() as _;
-                msghdr.msg_controllen = 64; // Enough for IP_PKTINFO
+                msghdr.msg_controllen = MSG_CONTROL_LEN as _; // Enough for IP_PKTINFO
                 msghdr
             }),
-            last_sent_canvas: vec![0; crate::canvas::CANVAS_SIZE]
+            last_sent_canvas: vec![0; crate::const_settings::CANVAS_SIZE]
                 .into_boxed_slice()
                 .try_into()
                 .unwrap(),
             broadcast_ticks: 0,
-            diff_buffer: Vec::with_capacity(1024),
+            diff_buffer: Vec::with_capacity(DIFF_BUFFER_INITIAL_CAPACITY),
             clock,
         }
     }
@@ -215,10 +212,8 @@ impl WorkerCore {
         let addr: std::net::SocketAddr = format!("0.0.0.0:{}", self.port).parse().unwrap();
 
         // Increase Kernel UDP buffers
-        let rcv_buf = 32 * 1024 * 1024; // 32MB
-        let snd_buf = 32 * 1024 * 1024; // 32MB
-        socket.set_recv_buffer_size(rcv_buf).unwrap();
-        socket.set_send_buffer_size(snd_buf).unwrap();
+        socket.set_recv_buffer_size(SOCKET_RECV_BUF_SIZE).unwrap();
+        socket.set_send_buffer_size(SOCKET_SEND_BUF_SIZE).unwrap();
 
         socket.bind(&addr.into()).unwrap();
         socket
@@ -229,7 +224,7 @@ impl WorkerCore {
         IoUring::builder()
             .setup_coop_taskrun()
             .setup_single_issuer()
-            .build(32768)
+            .build(IO_URING_SQ_DEPTH)
             .expect("Failed to create io_uring")
     }
 
@@ -238,8 +233,8 @@ impl WorkerCore {
         let provide_bufs_sqe = opcode::ProvideBuffers::new(
             self.buffer_slab.as_mut_ptr(),
             PKT_BUF_SIZE as i32,
-            NUM_BUFFERS as u16,
-            BGID,
+            IO_URING_NUM_BUFFERS as u16,
+            IO_URING_BGID,
             0,
         )
         .build()
@@ -283,7 +278,7 @@ impl WorkerCore {
 
     #[cfg(target_os = "linux")]
     fn should_broadcast_full(&self) -> bool {
-        self.broadcast_ticks == 1 || self.broadcast_ticks % 60 == 0
+        self.broadcast_ticks == 1 || self.broadcast_ticks % FULL_BROADCAST_INTERVAL == 0
     }
 
     #[cfg(target_os = "linux")]
@@ -302,7 +297,7 @@ impl WorkerCore {
         );
 
         for (_, conn, _) in self.transport.connections.values_mut() {
-            for chunk in compressed_slice.chunks(1200) {
+            for chunk in compressed_slice.chunks(BROADCAST_CHUNK_SIZE) {
                 let _ = conn.dgram_send(chunk);
             }
         }
@@ -340,7 +335,7 @@ impl WorkerCore {
         );
 
         for (_, conn, _) in self.transport.connections.values_mut() {
-            for chunk in self.diff_buffer.chunks(1200) {
+            for chunk in self.diff_buffer.chunks(BROADCAST_CHUNK_SIZE) {
                 let _ = conn.dgram_send(chunk);
             }
         }
@@ -380,7 +375,7 @@ impl WorkerCore {
             self.buffer_slab[offset..].as_mut_ptr(),
             PKT_BUF_SIZE as i32,
             1,
-            BGID,
+            IO_URING_BGID,
             buffer_id as u16,
         )
         .build()
@@ -394,9 +389,13 @@ impl WorkerCore {
         }
 
         if !io_uring::cqueue::more(flags) {
-            let recv = opcode::RecvMsgMulti::new(fd_types, self.msghdr.as_ref() as *const _, BGID)
-                .build()
-                .user_data(TAG_INCOMING_UDP);
+            let recv = opcode::RecvMsgMulti::new(
+                fd_types,
+                self.msghdr.as_ref() as *const _,
+                IO_URING_BGID,
+            )
+            .build()
+            .user_data(TAG_INCOMING_UDP);
             unsafe {
                 if ring.submission().push(&recv).is_err() {
                     ring.submit().unwrap();
@@ -461,8 +460,8 @@ impl WorkerCore {
     fn maintain_connections(&mut self, last_timeout_ms: &mut u128) {
         let now_ms = self.clock.now_ms() as u128;
 
-        // Throttle to every 20ms to save massive CPU overhead on 40k+ connections
-        if now_ms - *last_timeout_ms >= 20 {
+        // Throttle to every CONN_TIMEOUT_THROTTLE_MS to save massive CPU overhead on 40k+ connections
+        if now_ms - *last_timeout_ms >= CONN_TIMEOUT_THROTTLE_MS {
             for (_, conn, _) in self.transport.connections.values_mut() {
                 conn.on_timeout();
             }
@@ -497,7 +496,7 @@ impl WorkerCore {
                         let recv = opcode::RecvMsgMulti::new(
                             fd_types,
                             self.msghdr.as_ref() as *const _,
-                            BGID,
+                            IO_URING_BGID,
                         )
                         .build()
                         .user_data(TAG_INCOMING_UDP);
@@ -523,9 +522,10 @@ impl WorkerCore {
 
         let fd_types = types::Fd(fd);
         // Initial socket receive sqe
-        let recv = opcode::RecvMsgMulti::new(fd_types, self.msghdr.as_ref() as *const _, BGID)
-            .build()
-            .user_data(TAG_INCOMING_UDP);
+        let recv =
+            opcode::RecvMsgMulti::new(fd_types, self.msghdr.as_ref() as *const _, IO_URING_BGID)
+                .build()
+                .user_data(TAG_INCOMING_UDP);
 
         unsafe {
             ring.submission().push(&recv).unwrap();
@@ -541,6 +541,7 @@ impl WorkerCore {
         loop {
             ring.submit_and_wait(1).unwrap();
 
+            // NOTE: handle evicting users from cooldown and cleans up current cooldown array
             self.handle_tick(&mut last_tick_sec);
             self.handle_broadcast();
 

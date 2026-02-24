@@ -1,4 +1,5 @@
 pub mod canvas;
+pub mod const_settings;
 pub mod cooldown;
 pub mod master;
 pub mod spsc;
@@ -8,6 +9,7 @@ pub mod transport;
 pub mod worker;
 
 use crate::canvas::Canvas;
+use crate::const_settings::SERVER_PORT;
 use crate::master::{MasterCore, PixelWrite};
 use crate::spsc::SpscRingBuffer;
 use crate::time::AtomicTime;
@@ -33,7 +35,7 @@ fn main() {
 
     println!("Bare-metal canvas server initializing...");
 
-    let port = 4433;
+    let port = SERVER_PORT;
     let args: Vec<String> = std::env::args().collect();
     let num_workers_arg = args
         .iter()

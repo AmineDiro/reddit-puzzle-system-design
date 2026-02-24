@@ -1,8 +1,5 @@
+use crate::const_settings::{CANVAS_BUFFER_POOL_SIZE, CANVAS_HEIGHT, CANVAS_SIZE, CANVAS_WIDTH};
 use std::sync::atomic::AtomicUsize;
-
-pub const CANVAS_WIDTH: usize = 1000;
-pub const CANVAS_HEIGHT: usize = 1000;
-pub const CANVAS_SIZE: usize = CANVAS_WIDTH * CANVAS_HEIGHT; // 1 MB (1,000,000 pixels)
 
 #[derive(Clone, Copy)]
 pub struct CanvasBuffer {
@@ -17,9 +14,9 @@ impl CanvasBuffer {
     }
 }
 
-// 16 buffers pre-allocated statically to avoid allocations later on. 16MB in .bss segment.
-pub const BUFFER_SIZE: usize = 16;
-pub static mut BUFFER_POOL: [CanvasBuffer; BUFFER_SIZE] = [CanvasBuffer::new(); BUFFER_SIZE];
+// Pre-allocated statically to avoid allocations later on. Lives in .bss segment.
+pub static mut BUFFER_POOL: [CanvasBuffer; CANVAS_BUFFER_POOL_SIZE] =
+    [CanvasBuffer::new(); CANVAS_BUFFER_POOL_SIZE];
 
 // Compressed buffers can be up to 2x the original size in worst case RLE
 #[derive(Clone, Copy)]
@@ -35,9 +32,9 @@ impl CompressedBuffer {
     }
 }
 
-pub static mut COMPRESSED_BUFFER_POOL: [CompressedBuffer; BUFFER_SIZE] =
-    [CompressedBuffer::new(); BUFFER_SIZE];
-pub static mut COMPRESSED_LENS: [usize; BUFFER_SIZE] = [0; BUFFER_SIZE];
+pub static mut COMPRESSED_BUFFER_POOL: [CompressedBuffer; CANVAS_BUFFER_POOL_SIZE] =
+    [CompressedBuffer::new(); CANVAS_BUFFER_POOL_SIZE];
+pub static mut COMPRESSED_LENS: [usize; CANVAS_BUFFER_POOL_SIZE] = [0; CANVAS_BUFFER_POOL_SIZE];
 
 // The currently active buffer index that workers read from.
 // RCU like without atomic pointers, just offsets of fixed size array

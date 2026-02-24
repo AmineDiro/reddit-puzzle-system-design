@@ -1,3 +1,8 @@
+use crate::const_settings::{
+    DGRAM_MAX_SEND_SIZE, MAX_CONNECTIONS_PER_WORKER, QUIC_DGRAM_QUEUE_LEN, QUIC_INITIAL_MAX_DATA,
+    QUIC_INITIAL_MAX_STREAM_DATA_BIDI_LOCAL, QUIC_INITIAL_MAX_STREAM_DATA_BIDI_REMOTE,
+    QUIC_INITIAL_MAX_STREAM_DATA_UNI, QUIC_INITIAL_MAX_STREAMS_BIDI, QUIC_INITIAL_MAX_STREAMS_UNI,
+};
 use quiche::{Connection, RecvInfo};
 use rand::Rng;
 use rustc_hash::FxHashMap;
@@ -15,8 +20,6 @@ pub struct SourceConnectionId(pub Vec<u8>);
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub struct DestinationConnectionId(pub Vec<u8>);
-
-pub const MAX_CONNECTIONS: usize = crate::cooldown::COOLDOWN_ARRAY_LEN * 64;
 
 pub struct TransportState {
     // Map of QUIC Source Connection ID -> Active Connection (Thread local)
@@ -43,16 +46,16 @@ impl TransportState {
             .set_application_protos(quiche::h3::APPLICATION_PROTOCOL)
             .unwrap();
 
-        config.set_initial_max_data(10_000_000);
-        config.set_initial_max_stream_data_bidi_local(1_000_000);
-        config.set_initial_max_stream_data_bidi_remote(1_000_000);
-        config.set_initial_max_stream_data_uni(1_000_000);
-        config.set_initial_max_streams_bidi(100);
-        config.set_initial_max_streams_uni(100);
+        config.set_initial_max_data(QUIC_INITIAL_MAX_DATA);
+        config.set_initial_max_stream_data_bidi_local(QUIC_INITIAL_MAX_STREAM_DATA_BIDI_LOCAL);
+        config.set_initial_max_stream_data_bidi_remote(QUIC_INITIAL_MAX_STREAM_DATA_BIDI_REMOTE);
+        config.set_initial_max_stream_data_uni(QUIC_INITIAL_MAX_STREAM_DATA_UNI);
+        config.set_initial_max_streams_bidi(QUIC_INITIAL_MAX_STREAMS_BIDI);
+        config.set_initial_max_streams_uni(QUIC_INITIAL_MAX_STREAMS_UNI);
         config.set_disable_active_migration(true);
 
         // Required for WebTransport / Datagrams
-        config.enable_dgram(true, 1000, 1000);
+        config.enable_dgram(true, QUIC_DGRAM_QUEUE_LEN, QUIC_DGRAM_QUEUE_LEN);
 
         let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
         std::fs::write("cert.crt", cert.cert.pem()).unwrap();
@@ -61,11 +64,17 @@ impl TransportState {
         config.load_cert_chain_from_pem_file("cert.crt").unwrap();
         config.load_priv_key_from_pem_file("key.key").unwrap();
 
-        let mut free_user_ids: Vec<u32> = (0..MAX_CONNECTIONS as u32).collect();
+        let free_user_ids: Vec<u32> = (0..MAX_CONNECTIONS_PER_WORKER as u32).collect();
 
         Self {
-            connections: FxHashMap::with_capacity_and_hasher(MAX_CONNECTIONS, Default::default()),
-            cid_map: FxHashMap::with_capacity_and_hasher(MAX_CONNECTIONS, Default::default()),
+            connections: FxHashMap::with_capacity_and_hasher(
+                MAX_CONNECTIONS_PER_WORKER,
+                Default::default(),
+            ),
+            cid_map: FxHashMap::with_capacity_and_hasher(
+                MAX_CONNECTIONS_PER_WORKER,
+                Default::default(),
+            ),
             free_user_ids,
             config,
         }
@@ -153,7 +162,7 @@ impl TransportState {
 
         // TODO: use h3 to poll dgrams
         // In a real WebTransport setup, we'd use h3 to poll dgrams
-        let mut dgram_buf = [0; 1500];
+        let mut dgram_buf = [0; DGRAM_MAX_SEND_SIZE];
         // Securely copies the decrypted, verified WebTransport datagram
         // out of quiche's internal state machine into our local variable dgram_buf
         while let Ok(len) = conn.dgram_recv(&mut dgram_buf) {

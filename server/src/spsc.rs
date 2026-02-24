@@ -1,3 +1,4 @@
+use crate::const_settings::SPSC_CAPACITY;
 use std::cell::UnsafeCell;
 use std::mem::MaybeUninit;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -6,13 +7,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 #[repr(align(64))]
 struct CachePadded<T>(T);
 
-// NOTE: Power of two capacity !!
-const CAPACITY: usize = 1024;
-
 pub struct SpscRingBuffer<T> {
     tail: CachePadded<AtomicUsize>, // Written by Worker
     head: CachePadded<AtomicUsize>, // Written by Master
-    buffer: [UnsafeCell<MaybeUninit<T>>; CAPACITY],
+    buffer: [UnsafeCell<MaybeUninit<T>>; SPSC_CAPACITY],
 }
 
 // Ensure the struct is safely sendable and shareable based on `T` properties
@@ -21,10 +19,8 @@ unsafe impl<T: Send> Sync for SpscRingBuffer<T> {}
 
 impl<T> SpscRingBuffer<T> {
     pub fn new() -> Self {
-        const UNINIT: UnsafeCell<MaybeUninit<()>> = UnsafeCell::new(MaybeUninit::uninit());
-
         let buffer = unsafe {
-            MaybeUninit::<[UnsafeCell<MaybeUninit<T>>; CAPACITY]>::uninit().assume_init()
+            MaybeUninit::<[UnsafeCell<MaybeUninit<T>>; SPSC_CAPACITY]>::uninit().assume_init()
         };
 
         Self {
@@ -40,12 +36,12 @@ impl<T> SpscRingBuffer<T> {
         let next_tail = current_tail.wrapping_add(1);
 
         // Strict boundary check. We use wrapping arithmetic correctly.
-        if current_tail.wrapping_sub(self.head.0.load(Ordering::Acquire)) >= CAPACITY {
-            // Buffer is full (1024 capacity)
+        if current_tail.wrapping_sub(self.head.0.load(Ordering::Acquire)) >= SPSC_CAPACITY {
+            // Buffer is full
             return Err(value);
         }
 
-        let index = current_tail & (CAPACITY - 1); // power of two modulo
+        let index = current_tail & (SPSC_CAPACITY - 1); // power of two modulo
 
         unsafe {
             (*self.buffer[index].get()).write(value);
@@ -64,7 +60,7 @@ impl<T> SpscRingBuffer<T> {
             return None;
         }
 
-        let index = current_head & (CAPACITY - 1);
+        let index = current_head & (SPSC_CAPACITY - 1);
         let value = unsafe { (*self.buffer[index].get()).assume_init_read() };
 
         // Matches the Release store of Head in push
@@ -73,6 +69,12 @@ impl<T> SpscRingBuffer<T> {
             .store(current_head.wrapping_add(1), Ordering::Release);
 
         Some(value)
+    }
+}
+
+impl<T> Default for SpscRingBuffer<T> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -92,15 +94,15 @@ mod tests {
     #[test]
     fn test_spsc_ring_buffer_full() {
         let buffer = SpscRingBuffer::<usize>::new();
-        for i in 0..1024 {
+        for i in 0..SPSC_CAPACITY {
             assert!(buffer.push(i).is_ok());
         }
-        assert!(buffer.push(1024).is_err());
+        assert!(buffer.push(SPSC_CAPACITY).is_err());
         assert_eq!(buffer.pop(), Some(0));
-        assert!(buffer.push(1024).is_ok());
-        assert!(buffer.push(1025).is_err());
+        assert!(buffer.push(SPSC_CAPACITY).is_ok());
+        assert!(buffer.push(SPSC_CAPACITY + 1).is_err());
 
-        for i in 1..=1024 {
+        for i in 1..=SPSC_CAPACITY {
             assert_eq!(buffer.pop(), Some(i));
         }
         assert_eq!(buffer.pop(), None);

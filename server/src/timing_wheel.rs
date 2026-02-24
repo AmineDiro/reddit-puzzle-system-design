@@ -1,7 +1,5 @@
+use crate::const_settings::TIMING_WHEEL_TICKS;
 use crate::cooldown::CooldownArray;
-
-// 300 ticks for a 5-minute cooldown (1 tick per second)
-pub const TIMING_WHEEL_TICKS: usize = 300;
 
 pub struct TimingWheel {
     pub wheel: [CooldownArray; TIMING_WHEEL_TICKS],
@@ -34,8 +32,14 @@ impl TimingWheel {
     #[inline(always)]
     pub fn add_cooldown(&mut self, local_id: u32) {
         // Find bucket that is basically just before current tick
-        // So they will expire 300 ticks from now.
+        // So they will expire TIMING_WHEEL_TICKS ticks from now.
         self.wheel[self.current_tick].set_cooldown(local_id);
+    }
+}
+
+impl Default for TimingWheel {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -51,13 +55,13 @@ mod tests {
         master.set_cooldown(55);
         wheel.add_cooldown(55);
 
-        // ticking 299 times shouldn't clear it
-        for _ in 0..299 {
+        // ticking TIMING_WHEEL_TICKS-1 times shouldn't clear it
+        for _ in 0..TIMING_WHEEL_TICKS - 1 {
             wheel.tick(&mut master);
             assert!(master.is_on_cooldown(55));
         }
 
-        // 300th tick should clear it
+        // Next tick should clear it
         wheel.tick(&mut master);
         assert!(!master.is_on_cooldown(55));
     }

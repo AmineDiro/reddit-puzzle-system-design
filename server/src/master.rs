@@ -1,4 +1,5 @@
 use crate::canvas::Canvas;
+use crate::const_settings::{BROADCAST_INTERVAL_MS, CANVAS_BUFFER_POOL_MASK, MASTER_BATCH_DRAIN};
 use crate::spsc::SpscRingBuffer;
 use crate::time::AtomicTime;
 use std::sync::Arc;
@@ -107,7 +108,7 @@ impl MasterCore {
         }
         // Use AtomicTime for high-performance timing without syscall overhead
         let mut last_broadcast_time = self.clock.now_ms();
-        let broadcast_threshold_ms = 100;
+        let broadcast_threshold_ms = BROADCAST_INTERVAL_MS;
 
         loop {
             let seq = CANVAS_SEQ.load(Ordering::Relaxed);
@@ -117,7 +118,7 @@ impl MasterCore {
 
             for worker_queue in &self.workers {
                 // Batch drain to minimize lock duration effectively
-                for _ in 0..128 {
+                for _ in 0..MASTER_BATCH_DRAIN {
                     if let Some(pixel) = worker_queue.pop() {
                         self.canvas
                             .set_pixel(pixel.x as usize, pixel.y as usize, pixel.color);
@@ -133,7 +134,7 @@ impl MasterCore {
             let now = self.clock.now_ms();
             if now.wrapping_sub(last_broadcast_time) >= broadcast_threshold_ms {
                 let current_active = crate::canvas::ACTIVE_INDEX.load(Ordering::Relaxed);
-                let next_active = (current_active + 1) & 15;
+                let next_active = (current_active + 1) & CANVAS_BUFFER_POOL_MASK;
 
                 self.canvas.snapshot_to_pool(next_active);
 
