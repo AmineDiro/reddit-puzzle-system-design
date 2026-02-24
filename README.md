@@ -1,6 +1,6 @@
 # Bare Metal Canvas
 
-![Load Report](./figures/load_report.png)
+![Load Report](./figures/load_report_175kc.png)
 *Result: Handled 150k concurrent clients/connections with just 5 worker threads... and the 10-year-old CPU wasn't even sweating.*
 
 System design might be fake. I just wanted to see the absolute limits of a 10-year-old Ryzen 3600X chip using `io_uring` to tackle the Reddit r/place challenge.

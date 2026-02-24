@@ -14,6 +14,12 @@ impl CanvasBuffer {
     }
 }
 
+impl Default for CanvasBuffer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 // Pre-allocated statically to avoid allocations later on. Lives in .bss segment.
 pub static mut BUFFER_POOL: [CanvasBuffer; CANVAS_BUFFER_POOL_SIZE] =
     [CanvasBuffer::new(); CANVAS_BUFFER_POOL_SIZE];
@@ -29,6 +35,12 @@ impl CompressedBuffer {
         Self {
             data: [0; CANVAS_SIZE * 2],
         }
+    }
+}
+
+impl Default for CompressedBuffer {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

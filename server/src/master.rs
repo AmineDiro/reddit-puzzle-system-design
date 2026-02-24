@@ -5,8 +5,6 @@ use crate::time::AtomicTime;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-pub static CANVAS_SEQ: AtomicUsize = AtomicUsize::new(0);
-
 #[derive(Clone, Copy)]
 pub struct PixelWrite {
     pub x: u16,
@@ -111,11 +109,6 @@ impl MasterCore {
         let broadcast_threshold_ms = BROADCAST_INTERVAL_MS;
 
         loop {
-            let seq = CANVAS_SEQ.load(Ordering::Relaxed);
-
-            // Sequence lock write begin (make odd)
-            CANVAS_SEQ.store(seq.wrapping_add(1), Ordering::Release);
-
             for worker_queue in &self.workers {
                 // Batch drain to minimize lock duration effectively
                 for _ in 0..MASTER_BATCH_DRAIN {
@@ -127,9 +120,6 @@ impl MasterCore {
                     }
                 }
             }
-
-            // Sequence lock write end (make even)
-            CANVAS_SEQ.store(seq.wrapping_add(2), Ordering::Release);
 
             let now = self.clock.now_ms();
             if now.wrapping_sub(last_broadcast_time) >= broadcast_threshold_ms {
