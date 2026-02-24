@@ -47,6 +47,12 @@ pub struct Canvas {
     pub pixels: Box<[u8; CANVAS_SIZE]>,
 }
 
+impl Default for Canvas {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Canvas {
     pub fn new() -> Self {
         Self {

@@ -568,6 +568,10 @@ impl WorkerCore {
 
             self.process_pending_cqes(&mut ring, fd_types, &pending_cqes[..parsed_count]);
 
+            // orer important here.
+            // we first broadcast to all *established* connections, then we flush the pending sqes.
+            // new connections accepted (but not yet established) will not receive the broadcast.
+            // We accept them in process_pending_cqes and send ACK from server here
             let sqes_added = self.flush_outgoing(&mut ring, fd_types);
 
             if cqes_processed > 0 || sqes_added > 0 {

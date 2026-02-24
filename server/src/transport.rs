@@ -80,9 +80,11 @@ impl TransportState {
         peer: SocketAddr,
     ) -> Result<(), quiche::Error> {
         if self.free_user_ids.is_empty() {
-            #[cfg(feature = "debug-logs")]
-            println!("Worker at capacity, rejecting connection from {:?}", peer);
-            return Err(quiche::Error::Done); // Or another appropriate error
+            {
+                #[cfg(feature = "debug-logs")]
+                println!("Worker at capacity, rejecting connection from {:?}", peer);
+            }
+            return Err(quiche::Error::Done);
         }
 
         let scid_val = quiche::ConnectionId::from_ref(scid);
@@ -124,6 +126,7 @@ impl TransportState {
             return None;
         }
 
+        // else new connection has arrived, accept it
         let mut scid = [0; quiche::MAX_CONN_ID_LEN];
         rand::thread_rng().fill(&mut scid);
 
