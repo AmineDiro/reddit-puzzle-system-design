@@ -15,7 +15,6 @@ use socket2::{Domain, Protocol, Socket, Type};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::os::unix::io::AsRawFd;
 use std::sync::Arc;
-
 pub struct TxItem {
     pub buf: [u8; DGRAM_MAX_SEND_SIZE],
     pub addr: libc::sockaddr_in,
@@ -38,7 +37,6 @@ pub struct WorkerCore {
     last_sent_canvas: Box<[u8; crate::const_settings::CANVAS_SIZE]>,
     broadcast_ticks: u32,
     diff_buffer: Vec<u8>,
-    clock: Arc<crate::time::AtomicTime>,
 }
 
 unsafe impl Send for WorkerCore {}
@@ -121,11 +119,7 @@ impl Framing {
 }
 
 impl WorkerCore {
-    pub fn new(
-        master_queue: Arc<SpscRingBuffer<PixelWrite>>,
-        port: u16,
-        clock: Arc<crate::time::AtomicTime>,
-    ) -> Self {
+    pub fn new(master_queue: Arc<SpscRingBuffer<PixelWrite>>, port: u16) -> Self {
         let mut tx_items = Vec::with_capacity(TX_CAPACITY);
         let mut tx_free_indices = Vec::with_capacity(TX_CAPACITY);
         for i in 0..TX_CAPACITY {
@@ -161,7 +155,6 @@ impl WorkerCore {
                 .unwrap(),
             broadcast_ticks: 0,
             diff_buffer: Vec::with_capacity(DIFF_BUFFER_INITIAL_CAPACITY),
-            clock,
         }
     }
 
@@ -249,7 +242,7 @@ impl WorkerCore {
 
     #[cfg(target_os = "linux")]
     fn handle_tick(&mut self, last_tick_sec: &mut u64) {
-        let now_sec = self.clock.now_sec();
+        let now_sec = crate::time::CLOCK.now_sec();
 
         if now_sec > *last_tick_sec {
             // Execute O(1) tick mass eviction
@@ -283,33 +276,44 @@ impl WorkerCore {
 
     #[cfg(target_os = "linux")]
     fn broadcast_full_canvas(&mut self, active_index: usize) {
-        let (compressed_slice, new_canvas) = unsafe {
+        let (len, new_canvas) = unsafe {
             let len = crate::canvas::COMPRESSED_LENS[active_index];
-            let buf = &crate::canvas::COMPRESSED_BUFFER_POOL[active_index].data[..len];
             let canvas = &crate::canvas::BUFFER_POOL[active_index].data;
-            (buf, canvas)
+            (len, canvas)
         };
+
+        // NOTE: copy BEFORE sending to avoid any risk of reading a buffer mid-send from master
+        let mut local_compressed = CompressedBuffer::new();
+        unsafe {
+            local_compressed.data[..len]
+                .copy_from_slice(&crate::canvas::COMPRESSED_BUFFER_POOL[active_index].data[..len]);
+        }
+        self.last_sent_canvas.copy_from_slice(new_canvas);
 
         #[cfg(feature = "debug-logs")]
         println!(
             "Worker: broadcasting {} bytes of FULL RLE data to client",
-            compressed_slice.len()
+            len
         );
 
         for (_, conn, _) in self.transport.connections.values_mut() {
-            for chunk in compressed_slice.chunks(BROADCAST_CHUNK_SIZE) {
-                // TODO: how does client which chunk number is which?
+            for chunk in local_compressed.data[..len].chunks(BROADCAST_CHUNK_SIZE) {
                 let _ = conn.dgram_send(chunk);
             }
         }
-
-        self.last_sent_canvas.copy_from_slice(new_canvas);
     }
 
     #[cfg(target_os = "linux")]
     fn broadcast_canvas_diff(&mut self, active_index: usize) {
         self.diff_buffer.clear();
-        let new_canvas = unsafe { &crate::canvas::BUFFER_POOL[active_index].data };
+
+        let mut new_canva = CompressedBuffer::new();
+        // NOTE: same here, copy before sending to avoid reading a buffer mid-send
+        unsafe {
+            new_canva
+                .data
+                .copy_from_slice(&crate::canvas::BUFFER_POOL[active_index].data)
+        };
 
         for (i, (&new_pixel, old_pixel)) in new_canvas
             .iter()
@@ -459,7 +463,7 @@ impl WorkerCore {
 
     #[cfg(target_os = "linux")]
     fn maintain_connections(&mut self, last_timeout_ms: &mut u128) {
-        let now_ms = self.clock.now_ms() as u128;
+        let now_ms = crate::time::CLOCK.now_ms() as u128;
 
         // Throttle to every CONN_TIMEOUT_THROTTLE_MS to save massive CPU overhead on 40k+ connections
         if now_ms - *last_timeout_ms >= CONN_TIMEOUT_THROTTLE_MS {
@@ -533,8 +537,8 @@ impl WorkerCore {
         }
         ring.submit().unwrap();
 
-        let mut last_tick_sec = self.clock.now_sec();
-        let mut last_timeout_ms = self.clock.now_ms() as u128;
+        let mut last_tick_sec = crate::time::CLOCK.now_sec();
+        let mut last_timeout_ms = crate::time::CLOCK.now_ms() as u128;
 
         self.last_broadcast_index =
             crate::canvas::ACTIVE_INDEX.load(std::sync::atomic::Ordering::Acquire);

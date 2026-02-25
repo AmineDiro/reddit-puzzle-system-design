@@ -12,7 +12,7 @@ use crate::canvas::Canvas;
 use crate::const_settings::{SERVER_PORT, print_mem_footprint};
 use crate::master::{MasterCore, PixelWrite};
 use crate::spsc::SpscRingBuffer;
-use crate::time::AtomicTime;
+use crate::time::CLOCK;
 use crate::worker::WorkerCore;
 use std::sync::Arc;
 
@@ -80,16 +80,16 @@ fn main() {
     let mut worker_queues = Vec::with_capacity(worker_cores.len());
     let mut workers = Vec::with_capacity(worker_cores.len());
 
-    let clock = AtomicTime::new();
+    CLOCK.init();
 
     // Initialize Workers
     for &core_id in &worker_cores {
         let queue = Arc::new(SpscRingBuffer::<PixelWrite>::new());
         worker_queues.push(queue.clone());
-        workers.push((WorkerCore::new(queue, port, clock.clone()), core_id));
+        workers.push((WorkerCore::new(queue, port), core_id));
     }
 
-    let master = MasterCore::new(worker_queues, canvas.clone(), clock.clone());
+    let master = MasterCore::new(worker_queues, canvas.clone());
     // (BroadcastCore removed)
 
     // Spawn Threads

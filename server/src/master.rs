@@ -1,9 +1,8 @@
 use crate::canvas::Canvas;
 use crate::const_settings::{BROADCAST_INTERVAL_MS, CANVAS_BUFFER_POOL_MASK, MASTER_BATCH_DRAIN};
 use crate::spsc::SpscRingBuffer;
-use crate::time::AtomicTime;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::Ordering;
 
 #[derive(Clone, Copy)]
 pub struct PixelWrite {
@@ -83,20 +82,11 @@ pub fn rle_compress(src: &[u8], dst: &mut [u8]) -> usize {
 pub struct MasterCore {
     workers: Vec<Arc<SpscRingBuffer<PixelWrite>>>,
     pub canvas: Arc<Canvas>,
-    clock: Arc<AtomicTime>,
 }
 
 impl MasterCore {
-    pub fn new(
-        workers: Vec<Arc<SpscRingBuffer<PixelWrite>>>,
-        canvas: Arc<Canvas>,
-        clock: Arc<AtomicTime>,
-    ) -> Self {
-        Self {
-            workers,
-            canvas,
-            clock,
-        }
+    pub fn new(workers: Vec<Arc<SpscRingBuffer<PixelWrite>>>, canvas: Arc<Canvas>) -> Self {
+        Self { workers, canvas }
     }
 
     pub fn run(&self, core_id: usize) {
@@ -105,7 +95,7 @@ impl MasterCore {
             // Successfully pinned
         }
         // Use AtomicTime for high-performance timing without syscall overhead
-        let mut last_broadcast_time = self.clock.now_ms();
+        let mut last_broadcast_time = crate::time::CLOCK.now_ms();
         let broadcast_threshold_ms = BROADCAST_INTERVAL_MS;
 
         loop {
@@ -121,7 +111,7 @@ impl MasterCore {
                 }
             }
 
-            let now = self.clock.now_ms();
+            let now = crate::time::CLOCK.now_ms();
             if now.wrapping_sub(last_broadcast_time) >= broadcast_threshold_ms {
                 let current_active = crate::canvas::ACTIVE_INDEX.load(Ordering::Relaxed);
                 let next_active = (current_active + 1) & CANVAS_BUFFER_POOL_MASK;
