@@ -81,11 +81,11 @@ pub fn rle_compress(src: &[u8], dst: &mut [u8]) -> usize {
 
 pub struct MasterCore {
     workers: Vec<Arc<SpscRingBuffer<PixelWrite>>>,
-    pub canvas: Arc<Canvas>,
+    pub canvas: Canvas,
 }
 
 impl MasterCore {
-    pub fn new(workers: Vec<Arc<SpscRingBuffer<PixelWrite>>>, canvas: Arc<Canvas>) -> Self {
+    pub fn new(workers: Vec<Arc<SpscRingBuffer<PixelWrite>>>, canvas: Canvas) -> Self {
         Self { workers, canvas }
     }
 

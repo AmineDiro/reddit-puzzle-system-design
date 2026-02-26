@@ -57,10 +57,7 @@ impl TransportState {
         // Required for WebTransport / Datagrams
         config.enable_dgram(true, QUIC_DGRAM_QUEUE_LEN, QUIC_DGRAM_QUEUE_LEN);
 
-        let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
-        std::fs::write("cert.crt", cert.cert.pem()).unwrap();
-        std::fs::write("key.key", cert.key_pair.serialize_pem()).unwrap();
-
+        // NOTE: certs created in main.rs
         config.load_cert_chain_from_pem_file("cert.crt").unwrap();
         config.load_priv_key_from_pem_file("key.key").unwrap();
 

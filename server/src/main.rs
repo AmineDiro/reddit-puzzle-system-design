@@ -29,6 +29,16 @@ fn maximize_memlock() {
     }
 }
 
+fn create_certificates() -> Result<(), std::io::Error> {
+    if std::path::Path::new("cert.crt").exists() && std::path::Path::new("key.key").exists() {
+        return Ok(());
+    }
+    let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+    std::fs::write("cert.crt", cert.cert.pem())?;
+    std::fs::write("key.key", cert.key_pair.serialize_pem())?;
+    Ok(())
+}
+
 fn main() {
     #[cfg(target_os = "linux")]
     maximize_memlock();
@@ -42,6 +52,8 @@ fn main() {
         .position(|r| r == "-w" || r == "--workers")
         .and_then(|pos| args.get(pos + 1))
         .and_then(|val| val.parse::<usize>().ok());
+
+    create_certificates().expect("Failed to create certificates");
 
     let core_ids = core_affinity::get_core_ids().expect("Failed to get core IDs");
     let num_cores = core_ids.len();
@@ -76,7 +88,6 @@ fn main() {
 
     print_mem_footprint(num_workers);
 
-    let canvas = Arc::new(Canvas::new());
     let mut worker_queues = Vec::with_capacity(worker_cores.len());
     let mut workers = Vec::with_capacity(worker_cores.len());
 
@@ -89,20 +100,19 @@ fn main() {
         workers.push((WorkerCore::new(queue, port), core_id));
     }
 
-    let master = MasterCore::new(worker_queues, canvas.clone());
-    // (BroadcastCore removed)
+    // Initialize Master
+    let canvas = Canvas::new();
+    let master = MasterCore::new(worker_queues, canvas);
 
-    // Spawn Threads
+    // Spawn Workers
     let mut handles = Vec::new();
-
-    // 1. Spawn Workers
     for (worker, core_id) in workers {
         handles.push(std::thread::spawn(move || {
             worker.run(core_id);
         }));
     }
 
-    // 2. Run Master on main thread
+    //  Run Master on main thread
     println!("Starting Master loop on core {}...", master_core_id);
     master.run(master_core_id);
 
