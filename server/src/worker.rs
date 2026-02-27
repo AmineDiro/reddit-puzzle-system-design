@@ -1,4 +1,4 @@
-use crate::canvas::CompressedBuffer;
+use crate::canvas::{CanvasBuffer, CompressedBuffer};
 use crate::const_settings::{
     BROADCAST_CHUNK_SIZE, CONN_TIMEOUT_THROTTLE_MS, DGRAM_MAX_SEND_SIZE,
     DIFF_BUFFER_INITIAL_CAPACITY, FULL_BROADCAST_INTERVAL, IO_URING_BGID, IO_URING_NUM_BUFFERS,
@@ -36,6 +36,8 @@ pub struct WorkerCore {
     tx_free_indices: Vec<usize>,
     msghdr: Box<libc::msghdr>,
     last_sent_canvas: Box<[u8; crate::const_settings::CANVAS_SIZE]>,
+    local_canvas: Box<CanvasBuffer>,
+    local_compressed: Box<CompressedBuffer>,
     broadcast_ticks: u32,
     diff_buffer: Vec<u8>,
 }
@@ -154,6 +156,16 @@ impl WorkerCore {
                 .into_boxed_slice()
                 .try_into()
                 .unwrap(),
+            local_canvas: unsafe {
+                let layout = std::alloc::Layout::new::<CanvasBuffer>();
+                let ptr = std::alloc::alloc_zeroed(layout) as *mut CanvasBuffer;
+                Box::from_raw(ptr)
+            },
+            local_compressed: unsafe {
+                let layout = std::alloc::Layout::new::<CompressedBuffer>();
+                let ptr = std::alloc::alloc_zeroed(layout) as *mut CompressedBuffer;
+                Box::from_raw(ptr)
+            },
             broadcast_ticks: 0,
             diff_buffer: Vec::with_capacity(DIFF_BUFFER_INITIAL_CAPACITY),
         }
@@ -283,10 +295,9 @@ impl WorkerCore {
             (len, canvas)
         };
 
-        // NOTE: copy BEFORE sending to avoid any risk of reading a buffer mid-send from master
-        let mut local_compressed = CompressedBuffer::new();
+        // NOTE: use heap-allocated local_compressed to avoid ~2MB stack frame
         unsafe {
-            local_compressed.data[..len]
+            self.local_compressed.data[..len]
                 .copy_from_slice(&crate::canvas::COMPRESSED_BUFFER_POOL[active_index].data[..len]);
         }
         self.last_sent_canvas.copy_from_slice(new_canvas);
@@ -308,15 +319,15 @@ impl WorkerCore {
     fn broadcast_canvas_diff(&mut self, active_index: usize) {
         self.diff_buffer.clear();
 
-        let mut new_canva = CompressedBuffer::new();
-        // NOTE: same here, copy before sending to avoid reading a buffer mid-send
+        // NOTE: use heap-allocated local_canvas to avoid ~1MB stack frame
         unsafe {
-            new_canva
+            self.local_canvas
                 .data
                 .copy_from_slice(&crate::canvas::BUFFER_POOL[active_index].data)
         };
 
-        for (i, (&new_pixel, old_pixel)) in new_canva
+        for (i, (&new_pixel, old_pixel)) in self
+            .local_canvas
             .data
             .iter()
             .zip(self.last_sent_canvas.iter_mut())
