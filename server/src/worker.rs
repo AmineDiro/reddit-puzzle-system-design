@@ -317,6 +317,7 @@ impl WorkerCore {
         };
 
         for (i, (&new_pixel, old_pixel)) in new_canva
+            .data
             .iter()
             .zip(self.last_sent_canvas.iter_mut())
             .enumerate()
