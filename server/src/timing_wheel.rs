@@ -2,14 +2,26 @@ use crate::const_settings::TIMING_WHEEL_TICKS;
 use crate::cooldown::CooldownArray;
 
 pub struct TimingWheel {
-    pub wheel: [CooldownArray; TIMING_WHEEL_TICKS],
+    pub wheel: Box<[CooldownArray; TIMING_WHEEL_TICKS]>,
     pub current_tick: usize,
 }
 
 impl TimingWheel {
     pub fn new() -> Self {
+        // Allocate directly on the heap via Vec to avoid a ~2.4 MB stack frame.
+        // Box::new([CooldownArray::new(); TIMING_WHEEL_TICKS]) constructs the
+        // full array on the stack before boxing it — fatal in debug builds.
+        // SAFETY: Vec is built with exactly TIMING_WHEEL_TICKS elements, so the
+        // raw pointer cast from *mut [T] to *mut [T; N] is valid.
+        let wheel: Box<[CooldownArray; TIMING_WHEEL_TICKS]> = unsafe {
+            let boxed_slice: Box<[CooldownArray]> = (0..TIMING_WHEEL_TICKS)
+                .map(|_| CooldownArray::new())
+                .collect::<Vec<_>>()
+                .into_boxed_slice();
+            Box::from_raw(Box::into_raw(boxed_slice) as *mut [CooldownArray; TIMING_WHEEL_TICKS])
+        };
         Self {
-            wheel: std::array::from_fn(|_| CooldownArray::new()),
+            wheel,
             current_tick: 0,
         }
     }
