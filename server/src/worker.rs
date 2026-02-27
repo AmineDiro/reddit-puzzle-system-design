@@ -545,6 +545,10 @@ impl WorkerCore {
         self.last_broadcast_index =
             crate::canvas::ACTIVE_INDEX.load(std::sync::atomic::Ordering::Acquire);
 
+        // Allocate once outside the loop — avoids a ~1 MB stack frame (Box::new
+        // builds the array on the stack before moving it to the heap) every tick.
+        let mut pending_cqes: Vec<(u64, i32, u32)> = Vec::with_capacity(u16::MAX as usize);
+
         loop {
             ring.submit_and_wait(1).unwrap();
 
@@ -553,20 +557,18 @@ impl WorkerCore {
             self.handle_broadcast();
 
             let mut cqes_processed = 0;
-            let mut pending_cqes = Box::new([(0u64, 0i32, 0u32); u16::MAX as usize]);
-            let mut parsed_count = 0;
+            pending_cqes.clear();
 
             let mut completion = ring.completion();
             while let Some(cqe) = completion.next() {
                 cqes_processed += 1;
-                if parsed_count < u16::MAX as usize {
-                    pending_cqes[parsed_count] = (cqe.user_data(), cqe.result(), cqe.flags());
-                    parsed_count += 1;
+                if pending_cqes.len() < u16::MAX as usize {
+                    pending_cqes.push((cqe.user_data(), cqe.result(), cqe.flags()));
                 }
             }
             drop(completion);
 
-            self.process_pending_cqes(&mut ring, fd_types, &pending_cqes[..parsed_count]);
+            self.process_pending_cqes(&mut ring, fd_types, &pending_cqes);
 
             // orer important here.
             // we first broadcast to all *established* connections, then we flush the pending sqes.
