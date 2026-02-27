@@ -316,7 +316,7 @@ impl WorkerCore {
                 .copy_from_slice(&crate::canvas::BUFFER_POOL[active_index].data)
         };
 
-        for (i, (&new_pixel, old_pixel)) in new_canvas
+        for (i, (&new_pixel, old_pixel)) in new_canva
             .iter()
             .zip(self.last_sent_canvas.iter_mut())
             .enumerate()
