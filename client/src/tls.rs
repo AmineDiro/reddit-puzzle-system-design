@@ -33,7 +33,19 @@ pub fn build_optimized_config() -> ClientConfig {
     let mut transport = quinn::TransportConfig::default();
     // 1 min timeout
     transport.max_idle_timeout(Some(std::time::Duration::from_secs(60).try_into().unwrap()));
-    transport.datagram_receive_buffer_size(Some(65536 * 4));
+
+    // Default receive_window is 16MB (!)
+    // We only receive small broadcast diffs, so 64KB MAAX
+    transport.receive_window(65_536u32.into());
+    transport.send_window(65_536);
+
+    // Stream windows — we don't use streams at all, just datagrams
+    transport.stream_receive_window(4_096u32.into());
+
+    // Datagram buffer — enough for a few broadcast chunks
+    transport.datagram_receive_buffer_size(Some(65_536));
+    transport.datagram_send_buffer_size(4_096);
+
     config.transport_config(Arc::new(transport));
 
     config
