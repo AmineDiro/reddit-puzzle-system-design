@@ -126,12 +126,12 @@ impl WorkerCore {
         let mut tx_items = Vec::with_capacity(TX_CAPACITY);
         let mut tx_free_indices = Vec::with_capacity(TX_CAPACITY);
         for i in 0..TX_CAPACITY {
-            tx_items.push(TxItem {
-                buf: [0; DGRAM_MAX_SEND_SIZE],
-                addr: unsafe { std::mem::zeroed() },
-                iov: unsafe { std::mem::zeroed() },
-                msghdr: unsafe { std::mem::zeroed() },
-            });
+            // SAFETY: TxItem is a plain-data struct (no padding that must be
+            // non-zero, no Drop impl). Using zeroed() avoids constructing the
+            // ~1,600-byte struct as a stack temporary before moving it into the
+            // Vec, which causes a stack overflow in debug builds (65,536 iters
+            // × ~1,600 bytes each quickly exhausts the 8 MB main-thread stack).
+            tx_items.push(unsafe { std::mem::zeroed::<TxItem>() });
             tx_free_indices.push(i);
         }
 
