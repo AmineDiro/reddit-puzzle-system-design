@@ -309,7 +309,7 @@ impl WorkerCore {
         );
 
         for (_, conn, _) in self.transport.connections.values_mut() {
-            for chunk in local_compressed.data[..len].chunks(BROADCAST_CHUNK_SIZE) {
+            for chunk in self.local_compressed.data[..len].chunks(BROADCAST_CHUNK_SIZE) {
                 let _ = conn.dgram_send(chunk);
             }
         }
