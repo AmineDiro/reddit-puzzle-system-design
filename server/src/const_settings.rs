@@ -201,11 +201,11 @@ pub const CANVAS_BUFFER_POOL_MASK: usize = CANVAS_BUFFER_POOL_SIZE - 1;
 // ---------------------------------------------------------------------------
 
 /// Capacity of each per-worker SPSC ring buffer. Must be a power of two.
-pub const SPSC_CAPACITY: usize = 1024;
+pub const SPSC_CAPACITY: usize = 65_536;
 
 /// Maximum number of pixel writes the master drains from each worker queue
 /// per iteration of its hot loop.
-pub const MASTER_BATCH_DRAIN: usize = 128;
+pub const MASTER_BATCH_DRAIN: usize = 4096;
 
 // ---------------------------------------------------------------------------
 // QUIC / quiche Configuration

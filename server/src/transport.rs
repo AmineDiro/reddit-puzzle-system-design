@@ -29,6 +29,9 @@ pub struct TransportState {
 
     // Quiche backend config
     pub config: quiche::Config,
+
+    /// Scratch space for parsing pixel datagrams to avoid per-packet allocations.
+    pub pixels_scratch: Vec<PixelDatagram>,
 }
 
 impl Default for TransportState {
@@ -74,6 +77,7 @@ impl TransportState {
             ),
             free_user_ids,
             config,
+            pixels_scratch: Vec::with_capacity(128), // Plenty for any single QUIC packet
         }
     }
 
@@ -151,20 +155,16 @@ impl TransportState {
         }
     }
 
-    fn process_datagrams(conn: &mut Connection) -> Vec<PixelDatagram> {
-        let mut pixels = Vec::new();
+    fn process_datagrams_internal(conn: &mut Connection, scratch: &mut Vec<PixelDatagram>) {
+        scratch.clear();
         if !conn.is_established() {
-            return pixels;
+            return;
         }
 
-        // TODO: use h3 to poll dgrams
-        // In a real WebTransport setup, we'd use h3 to poll dgrams
         let mut dgram_buf = [0; DGRAM_MAX_SEND_SIZE];
-        // Securely copies the decrypted, verified WebTransport datagram
-        // out of quiche's internal state machine into our local variable dgram_buf
         while let Ok(len) = conn.dgram_recv(&mut dgram_buf) {
             if len == std::mem::size_of::<PixelDatagram>() {
-                pixels.push(PixelDatagram {
+                scratch.push(PixelDatagram {
                     x: u16::from_ne_bytes([dgram_buf[0], dgram_buf[1]]),
                     y: u16::from_ne_bytes([dgram_buf[2], dgram_buf[3]]),
                     color: dgram_buf[4],
@@ -178,7 +178,6 @@ impl TransportState {
                 );
             }
         }
-        pixels
     }
 
     pub fn handle_incoming(
@@ -186,7 +185,7 @@ impl TransportState {
         buf: &mut [u8],
         peer: SocketAddr,
         local: SocketAddr,
-    ) -> Option<(u32, Vec<PixelDatagram>)> {
+    ) -> Option<(u32, &[PixelDatagram])> {
         let hdr = quiche::Header::from_slice(buf, quiche::MAX_CONN_ID_LEN).ok()?;
 
         let process_id = self.resolve_connection_id(&hdr.dcid[..], hdr.ty, local, peer)?;
@@ -194,6 +193,7 @@ impl TransportState {
         let tuple = self.connections.get_mut(&process_id)?;
         let user_id = tuple.0;
         let conn = &mut tuple.1;
+        let scratch = &mut self.pixels_scratch;
 
         let recv_info = RecvInfo {
             from: peer,
@@ -201,14 +201,14 @@ impl TransportState {
         };
         let _ = conn.recv(buf, recv_info);
 
-        let pixels = Self::process_datagrams(conn);
+        Self::process_datagrams_internal(conn, scratch);
 
-        if pixels.is_empty() {
+        if scratch.is_empty() {
             None
         } else {
             #[cfg(feature = "debug-logs")]
-            println!("Received {} pixels from {:?}", pixels.len(), peer);
-            Some((user_id, pixels))
+            println!("Received {} pixels from {:?}", scratch.len(), peer);
+            Some((user_id, scratch))
         }
     }
 

@@ -49,36 +49,36 @@ services:
     cpuset: "3,9"
     volumes:
       - ./test_results:/metrics
-    command: ["./loadgen", "--target", "https://10.5.0.10:4433", "--clients", "40000", "--id", "worker_1", "--max-conn-jitter", "30000", "--min-pixel-wait", "500", "--max-pixel-wait", "1500"]
+    command: ["./loadgen", "--target", "https://10.5.0.10:4433", "--clients", "20000", "--id", "worker_1", "--max-conn-jitter", "30000", "--min-pixel-wait", "20", "--max-pixel-wait", "20"]
 
-  worker_2:
-    <<: *worker-base
-    networks:
-      canvas_net:
-        ipv4_address: 10.5.0.3
-    cpuset: "4,10"
-    command: ["./loadgen", "--target", "https://10.5.0.10:4433", "--clients", "40000", "--id", "worker_2", "--max-conn-jitter", "30000", "--min-pixel-wait", "500", "--max-pixel-wait", "1500"]
-
-  worker_3:
-    <<: *worker-base
-    networks:
-      canvas_net:
-        ipv4_address: 10.5.0.4
-    cpuset: "5,11"
-    command: ["./loadgen", "--target", "https://10.5.0.10:4433", "--clients", "40000", "--id", "worker_3", "--max-conn-jitter", "30000", "--min-pixel-wait", "500", "--max-pixel-wait", "1500"]
-
-  worker_4:
-    <<: *worker-base
-    networks:
-      canvas_net:
-        ipv4_address: 10.5.0.5
-    cpuset: "3,9"
-    command: ["./loadgen", "--target", "https://10.5.0.10:4433", "--clients", "40000", "--id", "worker_4", "--max-conn-jitter", "30000", "--min-pixel-wait", "500", "--max-pixel-wait", "1500"]
-
-  worker_5:
-    <<: *worker-base
-    networks:
-      canvas_net:
-        ipv4_address: 10.5.0.6
-    cpuset: "4,10"
-    command: ["./loadgen", "--target", "https://10.5.0.10:4433", "--clients", "40000", "--id", "worker_5", "--max-conn-jitter", "30000", "--min-pixel-wait", "500", "--max-pixel-wait", "1500"]
+  # worker_2:
+  #   <<: *worker-base
+  #   networks:
+  #     canvas_net:
+  #       ipv4_address: 10.5.0.3
+  #   cpuset: "4,10"
+  #   command: ["./loadgen", "--target", "https://10.5.0.10:4433", "--clients", "50000", "--id", "worker_2", "--max-conn-jitter", "30000", "--min-pixel-wait", "500", "--max-pixel-wait", "1500"]
+  #
+  # worker_3:
+  #   <<: *worker-base
+  #   networks:
+  #     canvas_net:
+  #       ipv4_address: 10.5.0.4
+  #   cpuset: "5,11"
+  #   command: ["./loadgen", "--target", "https://10.5.0.10:4433", "--clients", "50000", "--id", "worker_3", "--max-conn-jitter", "30000", "--min-pixel-wait", "500", "--max-pixel-wait", "1500"]
+  #
+  # worker_4:
+  #   <<: *worker-base
+  #   networks:
+  #     canvas_net:
+  #       ipv4_address: 10.5.0.5
+  #   cpuset: "3,9"
+  #   command: ["./loadgen", "--target", "https://10.5.0.10:4433", "--clients", "50000", "--id", "worker_4", "--max-conn-jitter", "30000", "--min-pixel-wait", "500", "--max-pixel-wait", "1500"]
+    
+  # worker_5:
+  #   <<: *worker-base
+  #   networks:
+  #     canvas_net:
+  #       ipv4_address: 10.5.0.6
+  #   command: ["./loadgen", "--target", "https://10.5.0.10:4433", "--clients", "50000", "--id", "worker_5", "--max-conn-jitter", "30000", "--min-pixel-wait", "500", "--max-pixel-wait", "1500"]
+  #   cpuset: "4,10"
