@@ -34,17 +34,21 @@ pub fn build_optimized_config() -> ClientConfig {
     // 1 min timeout
     transport.max_idle_timeout(Some(std::time::Duration::from_secs(60).try_into().unwrap()));
 
+    // Aggressively shrink windows for memory efficiency.
+    // Each client only sends 5-byte pixels and receives small broadcast diffs.
     // Default receive_window is 16MB (!)
-    // We only receive small broadcast diffs, so 64KB MAAX
-    transport.receive_window(65_536u32.into());
-    transport.send_window(65_536);
+    transport.receive_window(8192u32.into());
+    transport.send_window(4096);
 
-    // Stream windows — we don't use streams at all, just datagrams
-    transport.stream_receive_window(4_096u32.into());
+    // Stream windows — we don't use streams at all, just datagrams.
+    // Set to minimum to save memory.
+    transport.stream_receive_window(0u32.into());
+    transport.max_concurrent_bidi_streams(0u32.into());
+    transport.max_concurrent_uni_streams(0u32.into());
 
-    // Datagram buffer — enough for a few broadcast chunks
-    transport.datagram_receive_buffer_size(Some(65_536));
-    transport.datagram_send_buffer_size(4_096);
+    // Datagram buffers — enough for a few broadcast chunks.
+    transport.datagram_receive_buffer_size(Some(8192));
+    transport.datagram_send_buffer_size(1024);
 
     config.transport_config(Arc::new(transport));
 

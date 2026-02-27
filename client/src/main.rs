@@ -80,26 +80,14 @@ async fn simulate_user(endpoint: Endpoint, metrics: Arc<metrics::LoadMetrics>, a
         }
     };
 
-    // Spawn RX task
-    let conn_rx = conn.clone();
-    let metrics_rx = metrics.clone();
-    tokio::spawn(async move {
-        while let Ok(dgram) = conn_rx.read_datagram().await {
-            metrics_rx.rx_datagrams.add(1);
-            metrics_rx.rx_bytes.add(dgram.len());
-        }
-        metrics_rx.active.add(usize::MAX); // Subtract 1 (wrapping) to indicate disconnection
-    });
-
-    // TX Loop
+    // TX payload prep
     let mut payload = [0u8; 5];
     payload[0..2].copy_from_slice(&100u16.to_ne_bytes());
     payload[2..4].copy_from_slice(&200u16.to_ne_bytes());
     payload[4] = 255;
-
-    // Pre-build payload as Bytes for zero-copy cloning
     let payload_bytes = Bytes::copy_from_slice(&payload);
 
+    // Single loop for both RX and TX to save task overhead
     loop {
         let pixel_wait = if args.min_pixel_wait >= args.max_pixel_wait {
             args.min_pixel_wait
@@ -107,23 +95,34 @@ async fn simulate_user(endpoint: Endpoint, metrics: Arc<metrics::LoadMetrics>, a
             rand::thread_rng().gen_range(args.min_pixel_wait..args.max_pixel_wait)
         };
 
-        if pixel_wait > 0 {
-            sleep(Duration::from_millis(pixel_wait)).await;
-        } else {
-            // Yield to allow other tasks to run if we are in a tight loop
-            tokio::task::yield_now().await;
-        }
-
-        if conn.send_datagram(payload_bytes.clone()).is_ok() {
-            metrics.tx_pixels.add(1);
-        } else {
-            // If the connection is closed, exit the TX loop
-            break;
+        tokio::select! {
+            // RX: Read incoming datagrams
+            res = conn.read_datagram() => {
+                match res {
+                    Ok(dgram) => {
+                        metrics.rx_datagrams.add(1);
+                        metrics.rx_bytes.add(dgram.len());
+                    }
+                    Err(_) => {
+                        // Connection closed
+                        break;
+                    }
+                }
+            }
+            // TX: Periodic pixel update
+            _ = sleep(Duration::from_millis(pixel_wait)) => {
+                if conn.send_datagram(payload_bytes.clone()).is_err() {
+                    break;
+                }
+                metrics.tx_pixels.add(1);
+            }
         }
     }
+
+    metrics.active.add(usize::MAX); // Subtract 1 (wrapping) to indicate disconnection
 }
 
-#[tokio::main]
+#[tokio::main(flavor = "current_thread")]
 async fn main() {
     let args = Args::parse();
     let config = tls::build_optimized_config();
@@ -151,7 +150,9 @@ async fn main() {
             } else {
                 rand::thread_rng().gen_range(0..a.max_conn_jitter)
             };
-            sleep(Duration::from_millis(jitter)).await;
+            if jitter > 0 {
+                sleep(Duration::from_millis(jitter)).await;
+            }
             simulate_user(ep, m, a).await;
         });
     }
