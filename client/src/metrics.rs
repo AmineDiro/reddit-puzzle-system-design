@@ -80,11 +80,11 @@ pub fn spawn_csv_exporter(metrics: Arc<LoadMetrics>, worker_id: String) {
 
         if let Some(ref mut f) = file {
             let _ = f
-                .write_all(b"timestamp,active,failed,tx_pixels,rx_dgram_s,rx_mbps\n")
+                .write_all(b"timestamp,active,failed,tx_pixels,tx_pps,rx_dgram_s,rx_mbps\n")
                 .await;
         }
 
-        let (mut last_dgrams, mut last_bytes) = (0, 0);
+        let (mut last_dgrams, mut last_bytes, mut last_tx) = (0, 0, 0);
 
         loop {
             sleep(Duration::from_secs(1)).await;
@@ -95,16 +95,19 @@ pub fn spawn_csv_exporter(metrics: Arc<LoadMetrics>, worker_id: String) {
 
             let current_dgrams = metrics.rx_datagrams.get();
             let current_bytes = metrics.rx_bytes.get();
+            let current_tx = metrics.tx_pixels.get();
 
             let dps = current_dgrams - last_dgrams;
+            let tx_pps = current_tx - last_tx;
             let mbps = ((current_bytes - last_bytes) as f64 * 8.0) / 1_000_000.0;
 
             let row = format!(
-                "{},{},{},{},{},{:.3}\n",
+                "{},{},{},{},{},{},{:.3}\n",
                 ts,
                 metrics.active.get(),
                 metrics.failed.get(),
                 metrics.tx_pixels.get(),
+                tx_pps,
                 dps,
                 mbps
             );
@@ -115,6 +118,7 @@ pub fn spawn_csv_exporter(metrics: Arc<LoadMetrics>, worker_id: String) {
 
             last_dgrams = current_dgrams;
             last_bytes = current_bytes;
+            last_tx = current_tx;
         }
     });
 }

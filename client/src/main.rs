@@ -4,6 +4,7 @@
 // rand = "0.8"
 // clap = { version = "4.4", features = ["derive"] }
 
+use bytes::Bytes;
 use clap::Parser;
 use quinn::Endpoint;
 use rand::Rng;
@@ -79,7 +80,25 @@ async fn simulate_user(endpoint: Endpoint, metrics: Arc<metrics::LoadMetrics>, a
         }
     };
 
-    let mut _canvas = vec![0u8; 1_000_000];
+    // Spawn RX task
+    let conn_rx = conn.clone();
+    let metrics_rx = metrics.clone();
+    tokio::spawn(async move {
+        while let Ok(dgram) = conn_rx.read_datagram().await {
+            metrics_rx.rx_datagrams.add(1);
+            metrics_rx.rx_bytes.add(dgram.len());
+        }
+        metrics_rx.active.add(usize::MAX); // Subtract 1 (wrapping) to indicate disconnection
+    });
+
+    // TX Loop
+    let mut payload = [0u8; 5];
+    payload[0..2].copy_from_slice(&100u16.to_ne_bytes());
+    payload[2..4].copy_from_slice(&200u16.to_ne_bytes());
+    payload[4] = 255;
+
+    // Pre-build payload as Bytes for zero-copy cloning
+    let payload_bytes = Bytes::copy_from_slice(&payload);
 
     loop {
         let pixel_wait = if args.min_pixel_wait >= args.max_pixel_wait {
@@ -88,40 +107,18 @@ async fn simulate_user(endpoint: Endpoint, metrics: Arc<metrics::LoadMetrics>, a
             rand::thread_rng().gen_range(args.min_pixel_wait..args.max_pixel_wait)
         };
 
-        tokio::select! {
-            result = conn.read_datagram() => {
-                match result {
-                    Ok(dgram) => {
-                        #[cfg(feature = "debug-logs")]
-                        println!("Client {} received datagram of {} bytes", metrics.id, dgram.len());
-                        metrics.rx_datagrams.add(1);
-                        metrics.rx_bytes.add(dgram.len());
+        if pixel_wait > 0 {
+            sleep(Duration::from_millis(pixel_wait)).await;
+        } else {
+            // Yield to allow other tasks to run if we are in a tight loop
+            tokio::task::yield_now().await;
+        }
 
-                        // In a real scenario, you'd reassemble these chunks before decompressing.
-                        // Here we just show the decompression function works.
-                        // rle_decompress(&dgram, &mut canvas);
-                    }
-                    Err(e) => {
-                        #[cfg(feature = "debug-logs")]
-                        println!("Client {} connection error: {:?}", metrics.id, e);
-                        break;
-                    }
-                }
-            }
-            _ = sleep(Duration::from_millis(pixel_wait)) => {
-                let mut payload = [0u8; 5];
-                payload[0..2].copy_from_slice(&100u16.to_ne_bytes());
-                payload[2..4].copy_from_slice(&200u16.to_ne_bytes());
-                payload[4] = 255;
-
-                #[cfg(feature = "debug-logs")]
-                println!("Client {} sending pixel datagram...", metrics.id);
-                if conn.send_datagram(payload.to_vec().into()).is_ok() {
-                    #[cfg(feature = "debug-logs")]
-                    println!("Client {} pixel datagram sent successfully!", metrics.id);
-                    metrics.tx_pixels.add(1);
-                }
-            }
+        if conn.send_datagram(payload_bytes.clone()).is_ok() {
+            metrics.tx_pixels.add(1);
+        } else {
+            // If the connection is closed, exit the TX loop
+            break;
         }
     }
 }

@@ -1,0 +1,33 @@
+version: '3.8'
+
+# macOS local load-gen compose.
+# The server is NOT run here — it runs on the Linux box at 172.16.1.24.
+# Workers connect to the server over the private network.
+
+x-worker-config: &worker-base
+  build:
+    context: .
+    dockerfile: Dockerfile.loadgen
+  volumes:
+    - ./test_results:/metrics
+
+services:
+  worker_1:
+    <<: *worker-base
+    command: ["./loadgen", "--target", "https://172.16.1.24:4433", "--clients", "40000", "--id", "worker_1", "--max-conn-jitter", "10000", "--min-pixel-wait", "40", "--max-pixel-wait", "40"]
+
+  worker_2:
+    <<: *worker-base
+    command: ["./loadgen", "--target", "https://172.16.1.24:4433", "--clients", "40000", "--id", "worker_2", "--max-conn-jitter", "10000", "--min-pixel-wait", "40", "--max-pixel-wait", "40"]
+
+  # worker_3:
+  #   <<: *worker-base
+  #   command: ["./loadgen", "--target", "https://172.16.1.24:4433", "--clients", "40000", "--id", "worker_3", "--max-conn-jitter", "30000", "--min-pixel-wait", "500", "--max-pixel-wait", "1500"]
+
+  # worker_4:
+  #   <<: *worker-base
+  #   command: ["./loadgen", "--target", "https://172.16.1.24:4433", "--clients", "40000", "--id", "worker_4", "--max-conn-jitter", "30000", "--min-pixel-wait", "500", "--max-pixel-wait", "1500"]
+
+  # worker_5:
+  #   <<: *worker-base
+  #   command: ["./loadgen", "--target", "https://172.16.1.24:4433", "--clients", "40000", "--id", "worker_5", "--max-conn-jitter", "30000", "--min-pixel-wait", "500", "--max-pixel-wait", "1500"]

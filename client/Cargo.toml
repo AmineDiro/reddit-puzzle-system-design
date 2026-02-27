@@ -9,6 +9,7 @@ rand = "0.8"
 clap = { version = "4.4", features = ["derive"] }
 quinn = "0.10.2"
 rustls = { version = "0.21.7", features = ["quic", "dangerous_configuration"] }
+bytes = "1.5"
 
 [features]
 debug-logs = []
