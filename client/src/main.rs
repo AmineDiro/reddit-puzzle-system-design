@@ -87,14 +87,17 @@ async fn simulate_user(endpoint: Endpoint, metrics: Arc<metrics::LoadMetrics>, a
     payload[4] = 255;
     let payload_bytes = Bytes::copy_from_slice(&payload);
 
+    // Optimized Sleep: Pin the future once to avoid reallocation churn in tokio::select!
+    let sleep_duration = if args.min_pixel_wait >= args.max_pixel_wait {
+        args.min_pixel_wait
+    } else {
+        rand::thread_rng().gen_range(args.min_pixel_wait..args.max_pixel_wait)
+    };
+    let sleep = sleep(Duration::from_millis(sleep_duration));
+    tokio::pin!(sleep);
+
     // Single loop for both RX and TX to save task overhead
     loop {
-        let pixel_wait = if args.min_pixel_wait >= args.max_pixel_wait {
-            args.min_pixel_wait
-        } else {
-            rand::thread_rng().gen_range(args.min_pixel_wait..args.max_pixel_wait)
-        };
-
         tokio::select! {
             // RX: Read incoming datagrams
             res = conn.read_datagram() => {
@@ -110,11 +113,19 @@ async fn simulate_user(endpoint: Endpoint, metrics: Arc<metrics::LoadMetrics>, a
                 }
             }
             // TX: Periodic pixel update
-            _ = sleep(Duration::from_millis(pixel_wait)) => {
+            _ = &mut sleep => {
                 if conn.send_datagram(payload_bytes.clone()).is_err() {
                     break;
                 }
                 metrics.tx_pixels.add(1);
+
+                // Reset rather than re-create sleep future
+                let next_wait = if args.min_pixel_wait >= args.max_pixel_wait {
+                    args.min_pixel_wait
+                } else {
+                    rand::thread_rng().gen_range(args.min_pixel_wait..args.max_pixel_wait)
+                };
+                sleep.as_mut().reset(tokio::time::Instant::now() + Duration::from_millis(next_wait));
             }
         }
     }
@@ -127,20 +138,27 @@ async fn main() {
     let args = Args::parse();
     let config = tls::build_optimized_config();
 
-    let mut endpoint = Endpoint::client("0.0.0.0:0".parse().unwrap()).unwrap();
-    endpoint.set_default_client_config(config);
+    // Use a pool of endpoints to rotate source ports.
+    // This allows SO_REUSEPORT on the server to distribute load across all worker threads.
+    // 64 endpoints is plenty to cover the hashing diversity for 5-8 server workers.
+    let num_endpoints = 64;
+    let mut endpoints = Vec::with_capacity(num_endpoints);
+    for _ in 0..num_endpoints {
+        let mut endpoint = Endpoint::client("0.0.0.0:0".parse().unwrap()).unwrap();
+        endpoint.set_default_client_config(config.clone());
+        endpoints.push(endpoint);
+    }
 
     let metrics = metrics::LoadMetrics::new(args.id.clone());
-
     metrics::spawn_csv_exporter(metrics.clone(), args.id.clone());
 
     println!(
-        "Starting worker {} ramping up {} clients...",
-        args.id, args.clients
+        "Starting worker {} ramping up {} clients using {} source ports...",
+        args.id, args.clients, num_endpoints
     );
 
-    for _ in 0..args.clients {
-        let ep = endpoint.clone();
+    for i in 0..args.clients {
+        let ep = endpoints[i % num_endpoints].clone();
         let m = metrics.clone();
         let a = args.clone();
 

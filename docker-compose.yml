@@ -49,10 +49,6 @@ services:
     cpuset: "3,9"
     volumes:
       - ./test_results:/metrics
-    deploy:
-      resources:
-        limits:
-          memory: 12G
     command: ["./loadgen", "--target", "https://10.5.0.10:4433", "--clients", "20000", "--id", "worker_1", "--max-conn-jitter", "30000", "--min-pixel-wait", "20", "--max-pixel-wait", "20"]
 
   # worker_2:
