@@ -1,0 +1,278 @@
+---
+# ansible/benchmark.yml
+# Full benchmark lifecycle: start → measure → stop → collect.
+#
+# Usage:
+#   # Full run (default 5 min measurement):
+#   ansible-playbook -i inventory.ini benchmark.yml
+#
+#   # Custom duration (10 min measurement):
+#   ansible-playbook -i inventory.ini benchmark.yml -e bench_duration_secs=600
+#
+#   # Just collect results (if benchmark already ran):
+#   ansible-playbook -i inventory.ini benchmark.yml --tags collect
+#
+#   # Just stop everything:
+#   ansible-playbook -i inventory.ini benchmark.yml --tags stop
+
+# ── 1. Pre-flight: kill any leftover processes ─────────────────────
+- name: Clean up any running processes from previous benchmarks
+  hosts: all
+  become: true
+  gather_facts: false
+  tags: [start, stop, full]
+
+  tasks:
+    - name: Kill stale server processes
+      ansible.builtin.shell: pkill -KILL -f '[t]arget/release/server' || true
+      changed_when: true
+      when: role == 'server'
+
+    - name: Kill stale client processes
+      ansible.builtin.shell: pkill -KILL -f '[t]arget/release/client' || true
+      changed_when: true
+      when: role == 'client'
+
+    - name: Kill stale monitor processes
+      ansible.builtin.shell: pkill -KILL -f '[m]onitor.sh' || true
+      changed_when: true
+      when: role == 'server'
+
+    - name: Clean old metrics
+      ansible.builtin.shell: rm -f /opt/canvas/metrics/*.csv /opt/canvas/metrics/*.log
+      changed_when: true
+
+    - name: Pause 2s for cleanup
+      ansible.builtin.pause:
+        seconds: 2
+      run_once: true
+
+# ── 2. Start server-side monitoring ────────────────────────────────
+- name: Start server-side metrics collector
+  hosts: server
+  become: true
+  gather_facts: false
+  tags: [start, full]
+  tasks:
+    - name: Start monitor
+      ansible.builtin.include_role:
+        name: benchmark_monitor
+        tasks_from: start
+      tags: [monitor_start]
+
+# ── 3. Start the server ───────────────────────────────────────────
+- name: Start server binary
+  hosts: server
+  become: true
+  gather_facts: false
+  tags: [start, full]
+  tasks:
+    - name: Start server
+      ansible.builtin.include_role:
+        name: benchmark_run
+        tasks_from: start_server
+      tags: [bench_start_server]
+
+# ── 4. Start the clients ──────────────────────────────────────────
+- name: Start client loadgen
+  hosts: clients
+  become: true
+  gather_facts: false
+  tags: [start, full]
+  tasks:
+    - name: Start clients
+      ansible.builtin.include_role:
+        name: benchmark_run
+        tasks_from: start_clients
+      tags: [bench_start_clients]
+
+# ── 5. Wait for benchmark to complete ─────────────────────────────
+- name: Wait for benchmark measurement window
+  hosts: localhost
+  gather_facts: false
+  tags: [start, full]
+
+  vars:
+    ramp_secs: "{{ hostvars['canvas-server'].bench_ramp_secs | default(60) }}"
+    warmup_secs: "{{ hostvars['canvas-server'].bench_warmup_secs | default(60) }}"
+    duration_secs: "{{ hostvars['canvas-server'].bench_duration_secs | default(300) }}"
+
+  tasks:
+    - name: "Waiting: {{ ramp_secs }}s ramp + {{ warmup_secs }}s warmup + {{ duration_secs }}s measurement"
+      ansible.builtin.pause:
+        seconds: "{{ (ramp_secs | int) + (warmup_secs | int) + (duration_secs | int) }}"
+
+# ── 6. Stop clients first, then server ─────────────────────────────
+- name: Stop client loadgen
+  hosts: clients
+  become: true
+  gather_facts: false
+  tags: [stop, full]
+  tasks:
+    - name: Stop loadgen clients
+      ansible.builtin.include_role:
+        name: benchmark_run
+        tasks_from: stop
+      tags: [bench_stop]
+
+- name: Stop server and monitoring
+  hosts: server
+  become: true
+  gather_facts: false
+  tags: [stop, full]
+
+  tasks:
+    - name: Stop server
+      ansible.builtin.include_role:
+        name: benchmark_run
+        tasks_from: stop
+      tags: [bench_stop]
+
+    - name: Stop monitor
+      ansible.builtin.include_role:
+        name: benchmark_monitor
+        tasks_from: stop
+      tags: [monitor_stop]
+
+# ── 7. Generate shared timestamp for results ──────────────────────
+- name: Generate shared benchmark timestamp
+  hosts: localhost
+  gather_facts: false
+  tags: [collect, full]
+  tasks:
+    - name: Set run timestamp
+      ansible.builtin.set_fact:
+        run_timestamp: "{{ lookup('pipe', 'date +%Y%m%d_%H%M%S') }}"
+
+# ── 8. Collect results via rsync ───────────────────────────────────
+- name: Collect all metrics to local machine
+  hosts: all
+  become: true
+  gather_facts: false
+  tags: [collect, full]
+
+  vars:
+    bench_results_dir: "{{ playbook_dir }}/../bench_results/{{ hostvars['localhost'].run_timestamp }}"
+
+  roles:
+    - role: benchmark_collect
+      tags: [collect]
+
+# ── 9. Collect system info and write README ────────────────────────
+- name: Gather system info from all machines
+  hosts: all
+  become: true
+  gather_facts: true
+  tags: [collect, full]
+
+  tasks:
+    - name: Collect lscpu
+      ansible.builtin.command: lscpu
+      register: lscpu_output
+      changed_when: false
+
+    - name: Collect memory info
+      ansible.builtin.command: free -h
+      register: free_output
+      changed_when: false
+
+    - name: Collect uname
+      ansible.builtin.command: uname -a
+      register: uname_output
+      changed_when: false
+
+    - name: Collect kernel network tuning
+      ansible.builtin.shell: |
+        echo "=== sysctl net.core ==="
+        sysctl net.core.rmem_max net.core.wmem_max net.core.netdev_max_backlog net.core.somaxconn 2>/dev/null || true
+        echo ""
+        echo "=== sysctl net.ipv4.udp ==="
+        sysctl net.ipv4.udp_mem net.ipv4.udp_rmem_min net.ipv4.udp_wmem_min 2>/dev/null || true
+      register: sysctl_output
+      changed_when: false
+
+- name: Write benchmark README
+  hosts: localhost
+  gather_facts: false
+  tags: [collect, full]
+
+  vars:
+    bench_results_dir: "{{ playbook_dir }}/../bench_results/{{ hostvars['localhost'].run_timestamp }}"
+    server_host: "canvas-server"
+
+  tasks:
+    - name: Generate README.md
+      ansible.builtin.copy:
+        dest: "{{ bench_results_dir }}/README.md"
+        mode: "0644"
+        content: |
+          # Benchmark Run — {{ hostvars['localhost'].run_timestamp }}
+
+          ## Experiment Configuration
+
+          ### Server ({{ server_host }})
+          - **Private IP**: {{ hostvars[server_host].private_ip }}
+          - **Workers**: {{ hostvars[server_host].num_workers }}
+          - **NIC**: {{ hostvars[server_host].nic_iface }}
+          - **Ramp**: {{ hostvars[server_host].bench_ramp_secs | default(60) }}s
+          - **Warmup**: {{ hostvars[server_host].bench_warmup_secs | default(60) }}s
+          - **Duration**: {{ hostvars[server_host].bench_duration_secs | default(300) }}s
+
+          {% for client in groups['clients'] %}
+          ### Client ({{ client }})
+          - **Private IP**: {{ hostvars[client].private_ip }}
+          - **Loadgen workers**: {{ hostvars[client].loadgen_workers }}
+          - **Clients per worker**: {{ hostvars[client].clients_per_worker }}
+          - **Total connections**: {{ hostvars[client].loadgen_workers | int * hostvars[client].clients_per_worker | int }}
+          - **Pixel wait**: {{ hostvars[client].min_pixel_wait | default(20) }}–{{ hostvars[client].max_pixel_wait | default(50) }}ms
+          - **Connection jitter**: {{ hostvars[client].max_conn_jitter | default(60000) }}ms
+
+          {% endfor %}
+          ---
+
+          ## Server System Info ({{ server_host }})
+
+          ### uname
+          ```
+          {{ hostvars[server_host].uname_output.stdout }}
+          ```
+
+          ### lscpu
+          ```
+          {{ hostvars[server_host].lscpu_output.stdout }}
+          ```
+
+          ### Memory
+          ```
+          {{ hostvars[server_host].free_output.stdout }}
+          ```
+
+          ### Kernel Tuning
+          ```
+          {{ hostvars[server_host].sysctl_output.stdout }}
+          ```
+
+          {% for client in groups['clients'] %}
+          ## Client System Info ({{ client }})
+
+          ### uname
+          ```
+          {{ hostvars[client].uname_output.stdout }}
+          ```
+
+          ### lscpu
+          ```
+          {{ hostvars[client].lscpu_output.stdout }}
+          ```
+
+          ### Memory
+          ```
+          {{ hostvars[client].free_output.stdout }}
+          ```
+
+          ### Kernel Tuning
+          ```
+          {{ hostvars[client].sysctl_output.stdout }}
+          ```
+
+          {% endfor %}

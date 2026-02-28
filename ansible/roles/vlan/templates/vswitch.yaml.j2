@@ -1,0 +1,14 @@
+# roles/vlan/templates/vswitch.yaml.j2
+# Ansible-managed — do not edit by hand (re-run playbook to update)
+network:
+  version: 2
+  ethernets:
+    {{ vlan_parent_iface }}:
+      dhcp4: false
+  vlans:
+    {{ vlan_iface }}:
+      id: {{ vlan_id }}
+      link: {{ vlan_parent_iface }}
+      addresses:
+        - {{ private_ip }}/24
+      mtu: {{ vlan_mtu }}

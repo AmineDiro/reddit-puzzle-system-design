@@ -1,0 +1,17 @@
+# ansible/host_vars/canvas-server.yml
+# Per-host variables for the server machine
+
+private_ip: "10.0.1.10"
+role: server
+num_workers: 23              # EPYC 7401P: 24 cores → 23 workers + 1 master
+
+# NIC config (from: ip link on canvas-server)
+# enp98s0f0 = public IP, also carries VLAN-tagged vSwitch traffic
+vlan_parent_iface: enp98s0f0
+vlan_iface: enp98s0f0.4000
+nic_iface: enp98s0f0         # for IRQ pinning + monitoring
+
+# Benchmark timing
+bench_ramp_secs: 60          # client connection ramp period
+bench_warmup_secs: 60        # wait for caches to warm
+bench_duration_secs: 300     # 5 min steady-state measurement

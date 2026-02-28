@@ -1,0 +1,6 @@
+---
+# roles/kernel_tune/handlers/main.yml
+
+- name: Reload sysctl
+  ansible.builtin.command: sysctl --system
+  changed_when: true

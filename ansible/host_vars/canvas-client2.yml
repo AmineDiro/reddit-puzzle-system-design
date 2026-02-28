@@ -1,0 +1,6 @@
+# ansible/host_vars/canvas-client2.yml
+private_ip: "10.0.1.22"
+role: client
+loadgen_workers: 16
+clients_per_worker: 15000
+server_private_ip: "10.0.1.10"

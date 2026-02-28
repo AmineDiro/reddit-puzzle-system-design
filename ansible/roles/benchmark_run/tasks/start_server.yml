@@ -1,0 +1,25 @@
+---
+- name: Create metrics directory on server
+  ansible.builtin.file:
+    path: /opt/canvas/metrics
+    state: directory
+    mode: "0755"
+
+- name: Start server in background
+  ansible.builtin.shell: |
+    cd /opt/canvas
+    nohup ./target/release/server -w {{ num_workers }} \
+      > /opt/canvas/metrics/server_stdout.log 2>&1 &
+    echo $!
+  register: server_pid
+  changed_when: true
+
+- name: Save server PID
+  ansible.builtin.copy:
+    content: "{{ server_pid.stdout }}"
+    dest: /opt/canvas/metrics/.server.pid
+    mode: "0644"
+
+- name: Wait for server to initialize (5s)
+  ansible.builtin.pause:
+    seconds: 5

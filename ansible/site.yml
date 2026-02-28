@@ -1,0 +1,70 @@
+---
+# ansible/site.yml
+# Master playbook — runs every role in the correct order.
+#
+# Usage:
+#   ansible-playbook -i inventory.ini site.yml
+#
+# To only run specific roles (e.g. just kernel tuning):
+#   ansible-playbook -i inventory.ini site.yml --tags kernel
+#
+# To target only the server:
+#   ansible-playbook -i inventory.ini site.yml --limit canvas-server
+
+# ── 1. VLAN setup (all machines) ──────────────────────────────────
+- name: Configure vSwitch VLAN interface on all machines
+  hosts: all
+  become: true
+  tags: [vlan, network]
+  roles:
+    - vlan
+
+# ── 2. Kernel tuning (differentiated by role) ─────────────────────
+- name: Tune kernel on server (128MB socket buffers)
+  hosts: server
+  become: true
+  tags: [kernel, tune]
+  vars:
+    rmem_max: 134217728      # 128MB
+    wmem_max: 134217728
+    rmem_default: 67108864   # 64MB
+    wmem_default: 67108864
+  roles:
+    - kernel_tune
+
+- name: Tune kernel on clients (64MB socket buffers)
+  hosts: clients
+  become: true
+  tags: [kernel, tune]
+  vars:
+    rmem_max: 67108864       # 64MB
+    wmem_max: 67108864
+    rmem_default: 33554432
+    wmem_default: 33554432
+  roles:
+    - kernel_tune
+
+# ── 3. Firewall rules (all machines) ──────────────────────────────
+- name: Apply iptables NOTRACK + ACCEPT rules
+  hosts: all
+  become: true
+  tags: [firewall, network]
+  roles:
+    - firewall
+
+# ── 4. NIC IRQ pinning (server only) ──────────────────────────────
+- name: Pin NIC IRQs to SMT sibling cores
+  hosts: server
+  become: true
+  tags: [irq, tune]
+  # nic_iface comes from host_vars/canvas-server.yml (enp98s0f0)
+  roles:
+    - pin_irqs
+
+# ── 5. Build server and client binaries ───────────────────────────
+- name: Clone repo and build binaries
+  hosts: all
+  become: true
+  tags: [build]
+  roles:
+    - build

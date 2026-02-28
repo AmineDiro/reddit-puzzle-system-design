@@ -1,0 +1,16 @@
+# ansible/host_vars/canvas-client1.yml
+private_ip: "10.0.1.21"
+role: client
+server_private_ip: "10.0.1.10"
+
+# NIC config (from: ip link on cavas-client1)
+# enp9s0 = single NIC, carries both public + VLAN-tagged vSwitch traffic
+vlan_parent_iface: enp9s0
+vlan_iface: enp9s0.4000
+
+# Loadgen config
+loadgen_workers: 8           # 8-core machine → 8 processes
+clients_per_worker: 7500     # 60k total connections
+min_pixel_wait: 20           # ms between pixel sends
+max_pixel_wait: 50
+max_conn_jitter: 60000       # 60s ramp spread

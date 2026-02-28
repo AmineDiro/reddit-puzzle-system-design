@@ -1,0 +1,126 @@
+---
+# roles/firewall/tasks/main.yml
+# Applies iptables rules:
+#   - NOTRACK for QUIC traffic (conntrack bypass)
+#   - ACCEPT from private subnet
+#   - Saves rules persistently
+
+- name: Ensure iptables-persistent is installed
+  ansible.builtin.apt:
+    name: iptables-persistent
+    state: present
+
+# ── NOTRACK rules (bypass conntrack — the #1 silent performance killer) ─
+#
+# Strategy: match by BOTH port (precise) AND subnet (belt-and-suspenders).
+# run_optimized.sh uses subnet-based rules; we do both.
+
+# -- Port-based NOTRACK (precise: only QUIC traffic) --
+- name: NOTRACK incoming QUIC on server by port (PREROUTING)
+  ansible.builtin.iptables:
+    table: raw
+    chain: PREROUTING
+    protocol: udp
+    destination_port: "4433"
+    jump: NOTRACK
+  when: role == 'server'
+
+- name: NOTRACK outgoing QUIC on server by port (OUTPUT)
+  ansible.builtin.iptables:
+    table: raw
+    chain: OUTPUT
+    protocol: udp
+    source_port: "4433"
+    jump: NOTRACK
+  when: role == 'server'
+
+- name: NOTRACK incoming QUIC responses on clients by port (PREROUTING)
+  ansible.builtin.iptables:
+    table: raw
+    chain: PREROUTING
+    protocol: udp
+    source_port: "4433"
+    jump: NOTRACK
+  when: role == 'client'
+
+- name: NOTRACK outgoing QUIC on clients by port (OUTPUT)
+  ansible.builtin.iptables:
+    table: raw
+    chain: OUTPUT
+    protocol: udp
+    destination_port: "4433"
+    jump: NOTRACK
+  when: role == 'client'
+
+# -- Subnet-based NOTRACK (from run_optimized.sh — catches all traffic on VLAN)
+# This covers edge cases where the src/dst port doesn't match above (e.g. QUIC
+# path migration, ICMP to/from the subnet).
+- name: NOTRACK all traffic FROM private VLAN subnet (PREROUTING)
+  ansible.builtin.iptables:
+    table: raw
+    chain: PREROUTING
+    source: "10.0.1.0/24"
+    jump: NOTRACK
+
+- name: NOTRACK all traffic TO private VLAN subnet (PREROUTING)
+  ansible.builtin.iptables:
+    table: raw
+    chain: PREROUTING
+    destination: "10.0.1.0/24"
+    jump: NOTRACK
+
+- name: NOTRACK all traffic FROM private VLAN subnet (OUTPUT)
+  ansible.builtin.iptables:
+    table: raw
+    chain: OUTPUT
+    source: "10.0.1.0/24"
+    jump: NOTRACK
+
+- name: NOTRACK all traffic TO private VLAN subnet (OUTPUT)
+  ansible.builtin.iptables:
+    table: raw
+    chain: OUTPUT
+    destination: "10.0.1.0/24"
+    jump: NOTRACK
+
+# ── ACCEPT rules ─────────────────────────────────────────────────
+- name: Allow UDP 4433 from private VLAN subnet (server only)
+  ansible.builtin.iptables:
+    chain: INPUT
+    protocol: udp
+    source: "10.0.1.0/24"
+    destination_port: "4433"
+    jump: ACCEPT
+  when: role == 'server'
+
+- name: Allow ICMP from private VLAN (all machines)
+  ansible.builtin.iptables:
+    chain: INPUT
+    protocol: icmp
+    source: "10.0.1.0/24"
+    jump: ACCEPT
+
+- name: Allow SSH (don't lock yourself out)
+  ansible.builtin.iptables:
+    chain: INPUT
+    protocol: tcp
+    destination_port: "22"
+    jump: ACCEPT
+
+- name: Allow established/related connections
+  ansible.builtin.iptables:
+    chain: INPUT
+    ctstate: ESTABLISHED,RELATED
+    jump: ACCEPT
+
+# ── FORWARD chain ────────────────────────────────────────────────
+# NOTE: Not needed here. FORWARD is only traversed when the machine acts as a
+# router (packet arrives on one interface, leaves on another). This server is a
+# pure endpoint — all traffic hits INPUT/OUTPUT. The FORWARD rules in
+# run_optimized.sh existed because that script ran Docker (bridge traffic crosses
+# the bridge via FORWARD). On bare metal, this rule is a no-op.
+
+# ── Persist ───────────────────────────────────────────────────────
+- name: Save iptables rules (IPv4)
+  ansible.builtin.shell: iptables-save > /etc/iptables/rules.v4
+  changed_when: true

@@ -1,0 +1,2 @@
+# Ignore sensitive inventory file with real IPs
+inventory.ini

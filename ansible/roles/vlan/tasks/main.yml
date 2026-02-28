@@ -1,0 +1,51 @@
+---
+# roles/vlan/tasks/main.yml
+# Configures vSwitch VLAN interface and makes it persistent via netplan.
+# Runs on ALL machines (server + clients).
+
+- name: Install vlan tools
+  ansible.builtin.apt:
+    name: vlan
+    state: present
+    update_cache: true
+
+- name: Load 8021q kernel module
+  community.general.modprobe:
+    name: 8021q
+    state: present
+    persistent: present   # writes to /etc/modules-load.d/
+
+- name: Deploy netplan VLAN config
+  ansible.builtin.template:
+    src: vswitch.yaml.j2
+    dest: /etc/netplan/60-vswitch.yaml
+    owner: root
+    group: root
+    mode: "0600"
+  notify: Apply netplan
+
+- name: Bring up VLAN interface immediately (idempotent)
+  ansible.builtin.shell: |
+    set -e
+    # Create if not already present
+    if ! ip link show {{ vlan_iface }} >/dev/null 2>&1; then
+      ip link add link {{ vlan_parent_iface }} name {{ vlan_iface }} type vlan id {{ vlan_id }}
+    fi
+    ip link set {{ vlan_iface }} up
+    # Add IP only if not already assigned
+    if ! ip addr show {{ vlan_iface }} | grep -q "{{ private_ip }}"; then
+      ip addr add {{ private_ip }}/24 dev {{ vlan_iface }}
+    fi
+  changed_when: false
+
+- name: Verify VLAN interface is UP with correct IP
+  ansible.builtin.shell: ip addr show {{ vlan_iface }}
+  register: vlan_status
+  changed_when: false
+
+- name: Assert VLAN IP is configured
+  ansible.builtin.assert:
+    that:
+      - private_ip in vlan_status.stdout
+    fail_msg: "VLAN interface {{ vlan_iface }} does not have IP {{ private_ip }}"
+    success_msg: "VLAN interface OK: {{ private_ip }}"

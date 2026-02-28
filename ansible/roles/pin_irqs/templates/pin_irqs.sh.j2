@@ -1,0 +1,27 @@
+#!/bin/bash
+# Ansible-managed: pin_irqs.sh — Pin NIC RX queue IRQs to SMT sibling cores
+# Generated for NIC: {{ nic_iface | default('eth0') }}
+
+NIC="{{ nic_iface | default('eth0') }}"
+TOTAL_CORES=$(nproc)
+HALF=$((TOTAL_CORES / 2))   # SMT siblings start at core HALF on most EPYC chips
+
+NUM_QUEUES=$(ls /sys/class/net/${NIC}/queues/rx-* -d 2>/dev/null | wc -l)
+echo "NIC ${NIC} has ${NUM_QUEUES} RX queues. Pinning to cores ${HALF}+ (SMT siblings)"
+
+for i in $(seq 0 $((NUM_QUEUES - 1))); do
+    # Try common IRQ name patterns
+    IRQ=$(grep -E "${NIC}[-:].*${i}$|${NIC}-${i}[^0-9]|${NIC}:.*-${i}" \
+        /proc/interrupts 2>/dev/null | awk '{print $1}' | tr -d ':' | head -1)
+
+    if [ -n "$IRQ" ]; then
+        CORE=$((HALF + (i % HALF)))
+        echo "$CORE" > /proc/irq/$IRQ/smp_affinity_list 2>/dev/null && \
+            echo "  IRQ ${IRQ} (queue ${i}) -> core ${CORE}" || \
+            echo "  IRQ ${IRQ} (queue ${i}) -> FAILED (check /proc/irq/${IRQ}/smp_affinity_list)"
+    else
+        echo "  queue ${i}: no IRQ found (may use MSIX naming — check /proc/interrupts)"
+    fi
+done
+
+echo "Done."

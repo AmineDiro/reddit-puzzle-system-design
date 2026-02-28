@@ -1,0 +1,134 @@
+---
+# ansible/verify.yml
+# Connectivity and readiness checks — run AFTER site.yml completes.
+# Fails fast if any machine can't reach the server over the private VLAN.
+#
+# Usage:
+#   ansible-playbook -i inventory.ini verify.yml
+
+- name: Verify private VLAN connectivity from all machines
+  hosts: all
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Ping the server private IP from every host
+      ansible.builtin.command: "ping -c 4 -W 1 {{ hostvars['canvas-server'].private_ip }}"
+      register: ping_result
+      changed_when: false
+      failed_when: ping_result.rc != 0
+
+    - name: Show ping RTT
+      ansible.builtin.debug:
+        msg: "{{ ping_result.stdout_lines | select('match', '.*rtt.*') | list }}"
+
+    - name: Assert RTT is under 2ms (same DC should be <0.5ms)
+      ansible.builtin.shell: |
+        ping -c 10 -q {{ hostvars['canvas-server'].private_ip }} \
+          | grep rtt | awk -F'/' '{print $5}' | awk '{if ($1+0 > 2.0) exit 1}'
+      changed_when: false
+      register: rtt_check
+      failed_when: rtt_check.rc != 0
+
+- name: Verify NIC bandwidth between client-1 and server (iperf3)
+  hosts: server
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Start iperf3 server in background
+      ansible.builtin.shell: "iperf3 -s -B {{ hostvars['canvas-server'].private_ip }} -D --logfile /tmp/iperf3-server.log"
+      changed_when: true
+
+    - name: Wait for iperf3 to be ready
+      ansible.builtin.wait_for:
+        host: "{{ hostvars['canvas-server'].private_ip }}"
+        port: 5201
+        timeout: 10
+
+- name: Run iperf3 UDP bandwidth test from client-1
+  hosts: canvas-client1
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Run iperf3 UDP benchmark (900 Mbit/s target — leaves headroom for Ethernet framing overhead on 1Gbit NIC)
+      ansible.builtin.shell: |
+        iperf3 -c {{ hostvars['canvas-server'].private_ip }} \
+               -B {{ private_ip }} \
+               -u -b 900M -t 10 --json
+      register: iperf_output
+      changed_when: false
+
+    - name: Parse and assert bandwidth >= 800 Mbit/s
+      ansible.builtin.shell: |
+        echo '{{ iperf_output.stdout }}' | python3 -c "
+        import json, sys
+        d = json.load(sys.stdin)
+        # Use sum_received (server-side) for true wire throughput
+        bps = d['end']['sum_received']['bits_per_second']
+        lost = d['end']['sum']['lost_percent']
+        mbps = bps / 1e6
+        print(f'Received: {mbps:.0f} Mbit/s  |  Lost: {lost:.2f}%')
+        # AX52 has 1Gbit NIC — expect 800+ Mbit/s at wire speed
+        if mbps < 800:
+            print(f'FAIL: throughput {mbps:.0f} Mbit/s below 800 Mbit/s threshold')
+            sys.exit(1)
+        if lost > 2.0:
+            print(f'FAIL: packet loss {lost:.2f}% above 2% threshold')
+            sys.exit(1)
+        print('PASS')
+        "
+      changed_when: false
+
+- name: Clean up iperf3 server
+  hosts: server
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Kill iperf3 server
+      ansible.builtin.command: pkill iperf3
+      changed_when: true
+      ignore_errors: true
+
+- name: Verify server binary is present and runnable
+  hosts: server
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Check server binary
+      ansible.builtin.stat:
+        path: /opt/canvas/target/release/server
+      register: srv_bin
+
+    - name: Assert server binary exists
+      ansible.builtin.assert:
+        that: srv_bin.stat.exists and srv_bin.stat.executable
+        fail_msg: "Server binary missing — run: ansible-playbook site.yml --tags build"
+
+    - name: Check binary is linked with expected libraries
+      ansible.builtin.command: ldd /opt/canvas/target/release/server
+      register: ldd_out
+      changed_when: false
+
+    - name: Show dynamic dependencies
+      ansible.builtin.debug:
+        msg: "{{ ldd_out.stdout_lines }}"
+
+- name: Verify client binary on each client machine
+  hosts: clients
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Check client binary
+      ansible.builtin.stat:
+        path: /opt/canvas/target/release/client
+      register: cli_bin
+
+    - name: Assert client binary exists
+      ansible.builtin.assert:
+        that: cli_bin.stat.exists and cli_bin.stat.executable
+        fail_msg: "Client binary missing — run: ansible-playbook site.yml --tags build"

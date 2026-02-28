@@ -1,0 +1,61 @@
+---
+# roles/benchmark_collect/tasks/main.yml
+# Collects metrics files from all machines via rsync → local results dir.
+# Run this from the control machine (your Mac).
+#
+# Tags: collect
+
+- name: Ensure local results directory exists
+  ansible.builtin.file:
+    path: "{{ bench_results_dir }}"
+    state: directory
+    mode: "0755"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  tags: [collect]
+
+- name: Rsync server metrics to local machine
+  ansible.posix.synchronize:
+    src: /opt/canvas/metrics/
+    dest: "{{ bench_results_dir }}/"
+    mode: pull
+    rsync_opts:
+      - "--compress"
+      - "--include=*.csv"
+      - "--include=*.log"
+      - "--exclude=.*"
+  when: role == 'server'
+  tags: [collect]
+
+- name: Rsync client metrics to local machine
+  ansible.posix.synchronize:
+    src: /opt/canvas/metrics/
+    dest: "{{ bench_results_dir }}/"
+    mode: pull
+    rsync_opts:
+      - "--compress"
+      - "--include=*.csv"
+      - "--include=*.log"
+      - "--exclude=.*"
+  when: role == 'client'
+  tags: [collect]
+
+- name: Show collected files
+  ansible.builtin.find:
+    paths: "{{ bench_results_dir }}"
+    recurse: true
+    patterns: "*.csv"
+  delegate_to: localhost
+  become: false
+  register: collected_files
+  run_once: true
+  tags: [collect]
+
+- name: Report collected files
+  ansible.builtin.debug:
+    msg: "Collected {{ collected_files.files | length }} CSV files to {{ bench_results_dir }}"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  tags: [collect]

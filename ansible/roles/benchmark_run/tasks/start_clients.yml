@@ -1,0 +1,23 @@
+---
+- name: Create metrics directory on client
+  ansible.builtin.file:
+    path: /opt/canvas/metrics
+    state: directory
+    mode: "0755"
+
+- name: Start loadgen workers on client
+  ansible.builtin.shell: |
+    cd /opt/canvas
+    for i in $(seq 1 {{ loadgen_workers }}); do
+      nohup ./target/release/client \
+        --target "https://{{ server_private_ip }}:4433" \
+        --clients {{ clients_per_worker }} \
+        --id "{{ inventory_hostname }}-worker-${i}" \
+        --max-conn-jitter {{ max_conn_jitter | default(60000) }} \
+        --min-pixel-wait {{ min_pixel_wait | default(20) }} \
+        --max-pixel-wait {{ max_pixel_wait | default(50) }} \
+        --metrics-dir /opt/canvas/metrics \
+        > /opt/canvas/metrics/loadgen-worker-${i}.log 2>&1 &
+    done
+    echo "Launched {{ loadgen_workers }} loadgen workers"
+  changed_when: true

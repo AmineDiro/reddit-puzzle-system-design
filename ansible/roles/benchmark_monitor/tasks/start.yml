@@ -1,0 +1,26 @@
+---
+- name: Create metrics output directory
+  ansible.builtin.file:
+    path: /opt/canvas/metrics
+    state: directory
+    mode: "0755"
+
+- name: Deploy monitor.sh script
+  ansible.builtin.copy:
+    src: monitor.sh
+    dest: /opt/canvas/monitor.sh
+    mode: "0755"
+
+- name: Start metrics collector in background
+  ansible.builtin.shell: |
+    nohup /opt/canvas/monitor.sh {{ nic_iface }} \
+      > /opt/canvas/metrics/server_metrics.csv 2>/dev/null &
+    echo $!
+  register: monitor_pid
+  changed_when: true
+
+- name: Save monitor PID for later cleanup
+  ansible.builtin.copy:
+    content: "{{ monitor_pid.stdout }}"
+    dest: /opt/canvas/metrics/.monitor.pid
+    mode: "0644"

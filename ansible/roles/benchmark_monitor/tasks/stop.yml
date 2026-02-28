@@ -1,0 +1,20 @@
+---
+- name: Read monitor PID
+  ansible.builtin.slurp:
+    src: /opt/canvas/metrics/.monitor.pid
+  register: monitor_pid_file
+  ignore_errors: true
+
+- name: Stop metrics collector
+  ansible.builtin.shell: |
+    PID="{{ monitor_pid_file.content | default('') | b64decode | trim }}"
+    if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
+      kill "$PID"
+      echo "Stopped monitor (PID $PID)"
+    else
+      # Fallback: kill by script name
+      pkill -f '[m]onitor.sh' || true
+      echo "Stopped monitor via pkill"
+    fi
+  changed_when: true
+  ignore_errors: true

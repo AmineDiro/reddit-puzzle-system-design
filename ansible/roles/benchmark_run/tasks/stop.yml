@@ -1,0 +1,26 @@
+---
+- name: Stop client loadgen processes
+  ansible.builtin.shell: |
+    pkill -TERM -f '[t]arget/release/client' || true
+    sleep 2
+    pkill -KILL -f '[t]arget/release/client' || true
+    echo "All client processes stopped"
+  changed_when: true
+  when: role == 'client'
+
+- name: Stop server process
+  ansible.builtin.shell: |
+    PID=$(cat /opt/canvas/metrics/.server.pid 2>/dev/null || echo "")
+    if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
+      kill -TERM "$PID"
+      sleep 2
+      kill -KILL "$PID" 2>/dev/null || true
+      echo "Server (PID $PID) stopped"
+    else
+      pkill -TERM -f '[t]arget/release/server' || true
+      sleep 2
+      pkill -KILL -f '[t]arget/release/server' || true
+      echo "Server stopped via pkill"
+    fi
+  changed_when: true
+  when: role == 'server'

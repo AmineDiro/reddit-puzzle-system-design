@@ -1,0 +1,117 @@
+---
+# roles/build/tasks/main.yml
+# Clones the repo and builds server or client with native CPU optimizations.
+# Runs on server (builds the server binary) and clients (build the client binary).
+
+- name: Install build dependencies
+  ansible.builtin.apt:
+    name:
+      - git
+      - curl
+      - build-essential
+      - cmake
+      - clang
+      - pkg-config
+      - libssl-dev
+    state: present
+    update_cache: true
+
+# ── Rust toolchain ─────────────────────────────────────────────────
+- name: Check if rustup is already installed
+  ansible.builtin.stat:
+    path: /root/.cargo/bin/rustup
+  register: rustup_stat
+
+- name: Download rustup installer
+  ansible.builtin.get_url:
+    url: https://sh.rustup.rs
+    dest: /tmp/rustup-init.sh
+    mode: "0755"
+  when: not rustup_stat.stat.exists
+
+- name: Install Rust stable via rustup
+  ansible.builtin.shell: /tmp/rustup-init.sh -y --default-toolchain stable --profile minimal
+  environment:
+    CARGO_HOME: /root/.cargo
+    RUSTUP_HOME: /root/.rustup
+  when: not rustup_stat.stat.exists
+  changed_when: true
+
+- name: Ensure cargo is on PATH for subsequent tasks
+  ansible.builtin.lineinfile:
+    path: /root/.bashrc
+    line: 'export PATH="$HOME/.cargo/bin:$PATH"'
+    state: present
+
+# ── Clone / update repo ────────────────────────────────────────────
+- name: Clone canvas repo
+  ansible.builtin.git:
+    repo: "https://github.com/AmineDiro/reddit-puzzle-system-design"
+    dest: /opt/canvas
+    version: main
+    update: true        # pulls latest if already cloned
+    force: true         # discard any local changes (build artifacts are in target/)
+
+# ── Build ──────────────────────────────────────────────────────────
+- name: Build server binary (server machine only)
+  ansible.builtin.shell: |
+    . $HOME/.cargo/env
+    cargo build --release -p server \
+      --config 'profile.release.lto="fat"' \
+      --config 'profile.release.codegen-units=1'
+  args:
+    chdir: /opt/canvas
+  environment:
+    # target-cpu=native stays in RUSTFLAGS — cargo has no --config equivalent.
+    # lto and codegen-units go through --config so cargo knows about them
+    # and does NOT also inject -C embed-bitcode=no (which conflicts with lto).
+    RUSTFLAGS: "-C target-cpu=native"
+    CARGO_HOME: /root/.cargo
+    RUSTUP_HOME: /root/.rustup
+  when: role == 'server'
+  changed_when: true
+  register: server_build
+  async: 600
+  poll: 15
+
+- name: Build client (loadgen) binary (client machines only)
+  ansible.builtin.shell: |
+    . $HOME/.cargo/env
+    cargo build --release -p client
+  args:
+    chdir: /opt/canvas
+  environment:
+    RUSTFLAGS: "-C target-cpu=native"
+    CARGO_HOME: /root/.cargo
+    RUSTUP_HOME: /root/.rustup
+  when: role == 'client'
+  changed_when: true
+  async: 600
+  poll: 15
+
+# ── Verify binaries exist ─────────────────────────────────────────
+- name: Confirm server binary was produced
+  ansible.builtin.stat:
+    path: /opt/canvas/target/release/server
+  register: server_bin
+  when: role == 'server'
+
+- name: Assert server binary exists
+  ansible.builtin.assert:
+    that: server_bin.stat.exists
+    fail_msg: "Server build failed — /opt/canvas/target/release/server not found"
+    success_msg: "Server binary OK ({{ server_bin.stat.size | human_readable }})"
+  when: role == 'server'
+
+- name: Confirm client binary was produced
+  ansible.builtin.stat:
+    path: /opt/canvas/target/release/client
+  register: client_bin
+  when: role == 'client'
+
+- name: Assert client binary exists
+  ansible.builtin.assert:
+    that: client_bin.stat.exists
+    fail_msg: "Client build failed — /opt/canvas/target/release/client not found"
+    success_msg: "Client binary OK ({{ client_bin.stat.size | human_readable }})"
+  when: role == 'client'

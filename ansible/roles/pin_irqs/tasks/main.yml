@@ -1,0 +1,47 @@
+---
+# roles/pin_irqs/tasks/main.yml
+# Pins NIC RX queue IRQs to SMT sibling cores (cores N/2 and above),
+# keeping the lower physical cores free for io_uring workers.
+# Only runs on the server — clients don't need this level of tuning.
+
+- name: Deploy IRQ pinning script
+  ansible.builtin.template:
+    src: pin_irqs.sh.j2
+    dest: /usr/local/bin/pin_irqs.sh
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Run IRQ pinning script now
+  ansible.builtin.command: /usr/local/bin/pin_irqs.sh
+  register: irq_result
+  changed_when: true
+
+- name: Show IRQ pinning output
+  ansible.builtin.debug:
+    msg: "{{ irq_result.stdout_lines }}"
+
+- name: Install IRQ pinning as a systemd service (runs on each boot)
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/irq-pin.service
+    content: |
+      [Unit]
+      Description=Pin NIC IRQs to SMT sibling cores
+      After=network.target
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/bin/pin_irqs.sh
+      RemainAfterExit=yes
+
+      [Install]
+      WantedBy=multi-user.target
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Enable IRQ pinning service on boot
+  ansible.builtin.systemd:
+    name: irq-pin
+    enabled: true
+    daemon_reload: true
