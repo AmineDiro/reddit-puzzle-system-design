@@ -1,3 +1,6 @@
 /target
 **/.venv/*
 .env
+
+test_results/*
+bench_results/*
