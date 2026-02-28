@@ -228,7 +228,10 @@ impl WorkerCore {
     #[cfg(target_os = "linux")]
     fn setup_io_uring(&self) -> IoUring {
         IoUring::builder()
+            // io_uring will interrupt a task running in userspace when a completion event comes in
+            // for most other use cases, setting this flag will improve performance
             .setup_coop_taskrun()
+            // only one thread will be submitting requests
             .setup_single_issuer()
             .build(IO_URING_SQ_DEPTH)
             .expect("Failed to create io_uring")

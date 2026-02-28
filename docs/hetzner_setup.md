@@ -11,7 +11,7 @@ A kernel-engineer-level guide to pushing this QUIC/UDP canvas server to its abso
 | Role | Machine | Spec | Why | Monthly Cost |
 |------|---------|------|-----|-------------|
 | **Server** | [AX162-R](https://www.hetzner.com/dedicated-rootserver/ax162-r/) | AMD EPYC 9454P (48C/96T), 256GB DDR5 ECC, 2×NVMe | Single-socket EPYC = one NUMA domain, no cross-socket penalties. 48 physical cores means 47 workers + 1 master. Huge L3 cache (256MB) keeps `quiche` connection state hot. | ~€269 |
-| **Client** | [AX52](https://www.hetzner.com/dedicated-rootserver/ax52/) ×2 | AMD Ryzen 7 7700 (8C/16T), 64GB DDR5, 1Gbit | Each client machine runs 8-16 loadgen processes. Two machines on the same Hetzner VLAN gives ~1Gbit internal bandwidth with <0.5ms RTT. | ~€69 each |
+| **Client** | [AX52](https://www.hetzner.com/dedicated-rootserver/ax52/) ×2 | AMD Ryzen 7 7700 (8C/16T), 64GB DDR5, **1Gbit NIC** | Each client runs 16 loadgen processes × 15k clients = 240k connections. Actual QUIC payload peaks at ~480 Mbit/s — well within the 1Gbit link. | ~€69 each |
 
 > [!TIP]
 > **Why Hetzner over AWS/GCP?** Dedicated hardware means no hypervisor overhead, no noisy neighbors, no virtualized NICs. You get raw access to `io_uring`, `SO_REUSEPORT`, and kernel tuning. AWS Nitro cards add ~5μs per packet — that adds up at 1M+ msg/s. Hetzner gives you bare metal at 1/10th the cost.
@@ -29,7 +29,201 @@ A kernel-engineer-level guide to pushing this QUIC/UDP canvas server to its abso
 
 ---
 
-## 2. Ideal Test Topology
+## 2. Hetzner Network Setup (vSwitch / Private VLAN)
+
+This is the step most guides skip. By default Hetzner dedicated machines only have a **public IP** — they cannot reach each other privately. You must create a vSwitch to get a low-latency, flat private network between them.
+
+### 2.1 Create a vSwitch in Hetzner Robot
+
+> [!IMPORTANT]
+> All machines **must be in the same datacenter** (e.g., all in `FSN1`, or all in `NBG1`). A vSwitch does not span DCs.
+
+1. Log in to [Hetzner Robot](https://robot.hetzner.com)
+2. Go to **vSwitch** → **Create vSwitch**
+   - Name: `canvas-bench`
+   - VLAN ID: `4000` (or any unused 1–4094)
+3. Click **Add Server** and add all 3 machines (server + 2 clients)
+4. The vSwitch is free and provides **10Gbit/s** internal bandwidth
+
+After adding servers, each machine gets a new virtual network interface (usually `eth1` or `enp*s0f1` — check with `ip link`).
+
+### 2.2 Configure the Private Interface on Each Machine
+
+Run this **on every machine** (server + both clients). Replace `eth1` with your actual vSwitch interface name.
+
+**Server (AX162-R)**
+```bash
+# Find the new vSwitch interface — it will have NO IP yet
+ip link show
+# Look for the interface that just showed up (e.g. eth1, enp7s0f1np1)
+
+VLAN_IFACE="eth1"        # <-- change to match your interface
+VLAN_ID=4000             # <-- must match what you set in Robot
+SERVER_PRIVATE_IP="10.0.1.10/24"
+
+# Create VLAN sub-interface
+ip link add link $VLAN_IFACE name ${VLAN_IFACE}.${VLAN_ID} type vlan id $VLAN_ID
+ip link set ${VLAN_IFACE}.${VLAN_ID} up
+ip addr add $SERVER_PRIVATE_IP dev ${VLAN_IFACE}.${VLAN_ID}
+
+# Verify
+ip addr show ${VLAN_IFACE}.${VLAN_ID}
+```
+
+**Client-1 (AX52)**
+```bash
+VLAN_IFACE="eth1"
+VLAN_ID=4000
+CLIENT1_PRIVATE_IP="10.0.1.21/24"
+
+ip link add link $VLAN_IFACE name ${VLAN_IFACE}.${VLAN_ID} type vlan id $VLAN_ID
+ip link set ${VLAN_IFACE}.${VLAN_ID} up
+ip addr add $CLIENT1_PRIVATE_IP dev ${VLAN_IFACE}.${VLAN_ID}
+```
+
+**Client-2 (AX52)**
+```bash
+VLAN_IFACE="eth1"
+VLAN_ID=4000
+CLIENT2_PRIVATE_IP="10.0.1.22/24"
+
+ip link add link $VLAN_IFACE name ${VLAN_IFACE}.${VLAN_ID} type vlan id $VLAN_ID
+ip link set ${VLAN_IFACE}.${VLAN_ID} up
+ip addr add $CLIENT2_PRIVATE_IP dev ${VLAN_IFACE}.${VLAN_ID}
+```
+
+> [!TIP]
+> The `ip` commands above are ephemeral — they vanish on reboot. To make them persistent use **netplan** (Ubuntu) or `/etc/network/interfaces` (Debian). See §2.4 below.
+
+### 2.3 Open the Firewall on the Server
+
+Hetzner machines have no cloud firewall by default — your UFW/iptables is what matters. The server's public IP doesn't need to be open; all benchmark traffic goes over the private VLAN.
+
+```bash
+# On the SERVER — allow UDP 4433 from the private subnet only
+# (the NOTRACK rule already bypasses conntrack, but we still need ACCEPT in FORWARD)
+
+# Allow inbound QUIC from either client
+iptables -A INPUT -s 10.0.1.0/24 -p udp --dport 4433 -j ACCEPT
+
+# Allow ICMP for ping/diagnosis
+iptables -A INPUT -s 10.0.1.0/24 -p icmp -j ACCEPT
+
+# Allow SSH from everywhere (don't lock yourself out!)
+iptables -A INPUT -p tcp --dport 22 -j ACCEPT
+
+# Block everything else inbound on the public interface (optional hardening)
+# iptables -A INPUT -i eth0 -j DROP   # only if you're sure
+
+# Save rules
+iptables-save > /etc/iptables/rules.v4
+```
+
+### 2.4 Make Network Config Persistent (Ubuntu/netplan)
+
+Create `/etc/netplan/60-vswitch.yaml` on **each machine** with the appropriate IP:
+
+```yaml
+# /etc/netplan/60-vswitch.yaml
+# Run: sudo netplan apply
+
+network:
+  version: 2
+  ethernets:
+    eth1:          # the physical vSwitch port
+      dhcp4: false
+  vlans:
+    eth1.4000:
+      id: 4000
+      link: eth1
+      addresses:
+        - 10.0.1.10/24   # change per machine: .10 = server, .21/.22 = clients
+      mtu: 1400           # conservative MTU to avoid fragmentation over VLAN
+```
+
+```bash
+sudo netplan apply
+# Verify — should show the VLAN interface with its IP
+ip addr show eth1.4000
+```
+
+> [!WARNING]
+> Set `mtu: 1400` on the VLAN interface. Hetzner vSwitch adds VLAN headers that reduce usable MTU from 1500 → ~1480. Using 1400 gives headroom for QUIC + AEAD + framing without triggering silent fragmentation drops.
+
+### 2.5 Verify Connectivity Between All 3 Machines
+
+Run this connectivity check **before** starting the benchmark. There's no point debugging server performance when network isn't working.
+
+```bash
+#!/bin/bash
+# verify_network.sh — Run from CLIENT-1
+
+SERVER="10.0.1.10"
+CLIENT2="10.0.1.22"
+
+echo "=== Connectivity Check ==="
+
+# 1. Ping
+echo -n "Ping server:  "; ping -c 3 -q $SERVER   | grep 'rtt\|loss'
+echo -n "Ping client2: "; ping -c 3 -q $CLIENT2  | grep 'rtt\|loss'
+
+# 2. Latency — should be <0.5ms for same-DC Hetzner VLAN
+echo ""
+echo "=== Latency Check (expect <0.5ms) ==="
+ping -c 20 $SERVER | tail -1
+
+# 3. UDP reachability — confirm port 4433 is responding
+# (server must be running for this)
+echo ""
+echo "=== UDP Port Check ==="
+nc -u -z -w2 $SERVER 4433 && echo "UDP 4433 OPEN" || echo "UDP 4433 UNREACHABLE"
+
+# 4. Bandwidth sanity check — should saturate 10Gbit
+# Requires: apt install iperf3
+# Run on server first: iperf3 -s -B 10.0.1.10
+echo ""
+echo "=== Bandwidth Check (10Gbit target) ==="
+iperf3 -c $SERVER -B 10.0.1.21 -u -b 10G -t 5 --json | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+mbps = d['end']['sum']['bits_per_second']/1e6
+lost = d['end']['sum']['lost_percent']
+print(f'  Throughput: {mbps:.0f} Mbit/s')
+print(f'  Lost:       {lost:.2f}%')
+"
+```
+
+**Expected output when everything is correct:**
+```
+=== Connectivity Check ===
+Ping server:  1 packets transmitted, 1 received, 0% packet loss
+Ping client2: 1 packets transmitted, 1 received, 0% packet loss
+
+=== Latency Check (expect <0.5ms) ===
+rtt min/avg/max/mdev = 0.180/0.210/0.250/0.020 ms
+
+=== UDP Port Check ===
+UDP 4433 OPEN
+
+=== Bandwidth Check (10Gbit target) ===
+  Throughput: 9800 Mbit/s
+  Lost:       0.00%
+```
+
+> [!CAUTION]
+> If latency is >1ms or bandwidth <8Gbit, check: (1) both machines are in the **same DC**, (2) the VLAN interface is UP (`ip link show eth1.4000`), (3) MTU mismatch isn't causing fragmentation (`ping -s 1372 -M do $SERVER` should succeed; if it fails, lower MTU further).
+
+### IP Address Reference
+
+| Machine | Role | Private IP | Public IP |
+|---------|------|-----------|-----------|
+| AX162-R | Server | `10.0.1.10` | assigned by Hetzner |
+| AX52 #1 | Client-1 | `10.0.1.21` | assigned by Hetzner |
+| AX52 #2 | Client-2 | `10.0.1.22` | assigned by Hetzner |
+
+---
+
+## 3. Ideal Test Topology
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
@@ -62,7 +256,7 @@ A kernel-engineer-level guide to pushing this QUIC/UDP canvas server to its abso
 
 ---
 
-## 3. Server Setup (AX162-R)
+## 4. Server Setup (AX162-R)
 
 ### 3.1 OS Setup
 
@@ -212,7 +406,7 @@ sudo ./target/release/server -w 47
 
 ---
 
-## 4. Client Setup (AX52 Machines)
+## 5. Client Setup (AX52 Machines)
 
 ### 4.1 Kernel Tuning (run on each client machine)
 
@@ -276,7 +470,7 @@ Timeline for 480,000 total connections:
 
 ---
 
-## 5. What to Measure & How
+## 6. What to Measure & How
 
 ### 5.1 Server-Side Metrics
 
@@ -345,7 +539,7 @@ done
 
 ---
 
-## 6. Advanced Tuning Checklist
+## 7. Advanced Tuning Checklist
 
 ### 6.1 NUMA Awareness (EPYC Specific)
 
@@ -405,7 +599,7 @@ If `SO_REUSEPORT` distribution is uneven, attach a BPF program:
 
 ---
 
-## 7. Expected Results at Scale
+## 8. Expected Results at Scale
 
 Based on your architecture (io_uring + quiche + SO_REUSEPORT):
 
@@ -422,10 +616,13 @@ Based on your architecture (io_uring + quiche + SO_REUSEPORT):
 
 ---
 
-## 8. Quick-Start Checklist
+## 9. Quick-Start Checklist
 
-- [ ] Provision server (AX162-R) + 2 client machines (AX52) in **same Hetzner DC**
-- [ ] Set up private VLAN between all 3 machines
+- [ ] Provision server (AX162-R) + 2 client machines (AX52) in **same Hetzner DC** (e.g. FSN1)
+- [ ] Create vSwitch in Hetzner Robot → add all 3 machines (VLAN ID 4000)
+- [ ] Configure VLAN interface on each machine (`eth1.4000`) with IPs from §2.2
+- [ ] Create `/etc/netplan/60-vswitch.yaml` on each machine for persistence (§2.4)
+- [ ] Run `verify_network.sh` from Client-1 — confirm ping <0.5ms and 10Gbit/s throughput
 - [ ] Run `tune_server.sh` on server
 - [ ] Run `tune_client.sh` on both client machines
 - [ ] Run `pin_irqs.sh` on server
