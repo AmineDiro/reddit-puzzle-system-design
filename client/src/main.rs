@@ -29,6 +29,8 @@ struct Args {
     min_pixel_wait: u64,
     #[arg(long, default_value_t = 10000)]
     max_pixel_wait: u64,
+    #[arg(long, default_value = "/metrics")]
+    metrics_dir: String,
 }
 
 pub fn rle_decompress(src: &[u8], dst: &mut [u8]) -> usize {
@@ -150,7 +152,7 @@ async fn main() {
     }
 
     let metrics = metrics::LoadMetrics::new(args.id.clone());
-    metrics::spawn_csv_exporter(metrics.clone(), args.id.clone());
+    metrics::spawn_csv_exporter(metrics.clone(), args.id.clone(), args.metrics_dir.clone());
 
     println!(
         "Starting worker {} ramping up {} clients using {} source ports...",

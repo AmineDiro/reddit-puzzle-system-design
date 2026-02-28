@@ -43,10 +43,10 @@ impl LoadMetrics {
     }
 }
 
-pub fn spawn_csv_exporter(metrics: Arc<LoadMetrics>, worker_id: String) {
+pub fn spawn_csv_exporter(metrics: Arc<LoadMetrics>, worker_id: String, metrics_dir: String) {
     tokio::spawn(async move {
-        // We will just create local metrics so docker can map it properly, or if we run locally
-        let path = format!("/metrics/{}_data.csv", worker_id);
+        // Ansible playbook expects metrics in /opt/canvas/metrics/
+        let path = format!("{}/{}_data.csv", metrics_dir, worker_id);
         // Fallback for non-docker runs to `./test_results/` might be nice, but to match blueprint, we stick to /metrics
         let file_res = OpenOptions::new()
             .create(true)
